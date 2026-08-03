@@ -24,14 +24,22 @@ historial desde ahí** — el reinicio deja de ser un problema.
 5. Escribes el monto (puedes agregar una descripción, ej: `almuerzo 8.500`) → queda guardado,
    y te dice cuánto les queda en esa categoría (o el aviso de sobregiro si ya se pasaron)
 
-**Opción 2 — texto directo, sin botones (detecta todo solo):**
+**Opción 2 — código directo (más rápido, ideal si ya se lo saben de memoria):**
+Cada categoría tiene un código corto (se genera solo, ej: `LN01` para la primera
+categoría de Linda). Pueden mandarlo solo o con el monto en el mismo mensaje:
+- `LN01` → el bot reconoce cuenta y categoría, y pregunta el monto
+- `LN01 5.000 spinning` → queda registrado directo, sin preguntar nada
+- Los códigos exactos (y se pueden renombrar) están en la pestaña "Presupuestos"
+  del Excel — ver más abajo.
+
+**Opción 3 — texto directo, sin botones ni códigos (detecta todo solo):**
 Si mencionas la cuenta y la categoría en el mismo mensaje, el bot lo reconoce al
 tiro y no hace falta tocar nada:
 - `Lindo cafecitos 5.000 Starbucks`
 - `Casa supermercado 15.000 verduras`
 - `Starbucks 3.000, cafecitos de Lindo` (el orden no importa)
 
-**Opción 3 — texto libre genérico (si no se reconoce cuenta+categoría):**
+**Opción 4 — texto libre genérico (si no se reconoce cuenta+categoría):**
 `<lo que quieras> <categoría> <monto>` — el parser busca el **último número**
 como monto y una **palabra clave de categoría** en cualquier parte del mensaje.
 Esta opción no pregunta "cuenta" (Casa/Lindo/Linda) — queda sin asignar.
@@ -85,19 +93,23 @@ usan categorías genéricas aparte (`CATEGORIAS_LIBRES`: Comida, Transporte, etc
 cuentan para estos presupuestos** — quedan sin cuenta asignada. Para que sí cuenten, hay
 que usar los botones.
 
-## Definir los presupuestos desde el Excel (Google Sheets)
+## Definir los presupuestos (y códigos) desde el Excel
 
 Si conectaste Google Sheets (Paso 0), el bot crea automáticamente una **segunda
 pestaña llamada "Presupuestos"** en la misma planilla, prellenada con los montos
-que ya tenías en `CUENTAS_CONFIG`. Columnas: `Cuenta`, `Categoria`, `Presupuesto`.
+y códigos actuales. Columnas: `Cuenta`, `Categoria`, `Presupuesto`, `Codigo`.
 
-- Una fila con **Categoria en blanco** = el tope general de esa cuenta
+- Una fila con **Categoria en blanco** = el tope general de esa cuenta (sin código)
 - Dejar **Presupuesto en blanco** = sin límite para esa categoría
-- Editar cualquier monto ahí y listo — el bot lo relee:
+- La columna **Codigo** trae algo tipo `LN01`, `CA03`, etc. — pueden **cambiarlo
+  por lo que quieran** (ej: renombrar `LD01` a `N01`) y el bot lo respeta apenas
+  se sincronice
+- Cualquier cambio de montos o códigos se relee:
   - automáticamente cada vez que alguien pide `resumen`
-  - o al tiro si escriben `sincronizar` (ver abajo)
+  - cada 5 minutos en segundo plano (ver más abajo)
+  - o al tiro si escriben `sincronizar`
 - Las categorías en sí (los nombres) siguen definiéndose en `main.py` — la
-  planilla solo controla los **montos**, no agrega categorías nuevas.
+  planilla controla los **montos y códigos**, no agrega categorías nuevas.
 
 ## Compartido entre celulares, y sincronización con la planilla
 

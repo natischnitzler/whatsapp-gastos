@@ -189,6 +189,24 @@ CUENTAS_CONFIG = {
     },
 }
 
+# Prefijo de código por cuenta (para que Linda y Lindo no choquen aunque empiecen igual).
+# Los códigos reales que use el bot terminan siendo los que estén en la pestaña
+# "Presupuestos" del Excel — esto es solo el punto de partida.
+PREFIJOS_CODIGO = {"Casa": "CA", "Linda": "LN", "Lindo": "LD"}
+
+def _generar_codigos_iniciales() -> dict:
+    codigos = {}
+    for cuenta, config in CUENTAS_CONFIG.items():
+        prefijo = PREFIJOS_CODIGO[cuenta] if cuenta in PREFIJOS_CODIGO else cuenta[:2].upper()
+        for i, cat in enumerate(config["categorias"], start=1):
+            codigos[f"{prefijo}{i:02d}"] = (cuenta, cat)
+    return codigos
+
+# Mapa código -> (cuenta, categoria). Funciona sin Sheets con estos valores por
+# defecto; si Sheets está conectado, la columna "Codigo" de la pestaña
+# "Presupuestos" puede agregar o renombrar códigos (ver _cargar_presupuestos_desde_sheet).
+CODIGOS = _generar_codigos_iniciales()
+
 def _hoja_presupuestos():
     """Pestaña 'Presupuestos' — se crea sola la primera vez, prellenada con los valores actuales."""
     if "ws_presupuestos" not in _hoja_cache:
@@ -197,30 +215,36 @@ def _hoja_presupuestos():
         try:
             ws = sh.worksheet("Presupuestos")
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title="Presupuestos", rows=50, cols=3)
-            ws.append_row(["Cuenta", "Categoria", "Presupuesto"])
+            ws = sh.add_worksheet(title="Presupuestos", rows=50, cols=4)
+            ws.append_row(["Cuenta", "Categoria", "Presupuesto", "Codigo"])
             filas = []
             for cuenta, config in CUENTAS_CONFIG.items():
-                filas.append([cuenta, "", config.get("presupuesto_total") or ""])
+                filas.append([cuenta, "", config.get("presupuesto_total") or "", ""])
                 for cat, limite in config["categorias"].items():
-                    filas.append([cuenta, cat, limite if limite else ""])
+                    codigo = next((c for c, (cu, ca) in CODIGOS.items() if cu == cuenta and ca == cat), "")
+                    filas.append([cuenta, cat, limite if limite else "", codigo])
             ws.append_rows(filas)
         _hoja_cache["ws_presupuestos"] = ws
     return _hoja_cache["ws_presupuestos"]
 
 def _cargar_presupuestos_desde_sheet():
-    """Sobrescribe los montos de CUENTAS_CONFIG con lo que esté en la pestaña 'Presupuestos'.
-    Deja la fila de Categoria en blanco para el tope general de la cuenta."""
+    """Sobrescribe los montos de CUENTAS_CONFIG y los códigos con lo que esté en la
+    pestaña 'Presupuestos'. Deja la fila de Categoria en blanco para el tope general
+    de la cuenta. La columna Codigo es lo que la gente puede escribir directo en el
+    chat (ej: 'LN01 5.000 starbucks') en vez del nombre completo."""
+    global CODIGOS
     if not sheets_configurado():
         return
     try:
         ws = _hoja_presupuestos()
         filas = ws.get_all_records()
         actualizados = 0
+        codigos_nuevos = dict(_generar_codigos_iniciales())  # parte de la base, la planilla puede agregar/sobrescribir
         for fila in filas:
             cuenta = str(fila.get("Cuenta", "")).strip()
             categoria = str(fila.get("Categoria", "")).strip()
             presupuesto_raw = str(fila.get("Presupuesto", "")).strip()
+            codigo_raw = str(fila.get("Codigo", "")).strip()
             if cuenta not in CUENTAS_CONFIG:
                 continue
             try:
@@ -231,10 +255,14 @@ def _cargar_presupuestos_desde_sheet():
                 if categoria in CUENTAS_CONFIG[cuenta]["categorias"]:
                     CUENTAS_CONFIG[cuenta]["categorias"][categoria] = presupuesto
                     actualizados += 1
+                    if codigo_raw:
+                        codigo_norm = re.sub(r"\s+", "", codigo_raw).upper()
+                        codigos_nuevos[codigo_norm] = (cuenta, categoria)
             else:
                 CUENTAS_CONFIG[cuenta]["presupuesto_total"] = presupuesto
                 actualizados += 1
-        print(f"Presupuestos: {actualizados} valores actualizados desde la planilla.")
+        CODIGOS = codigos_nuevos
+        print(f"Presupuestos: {actualizados} valores actualizados, {len(CODIGOS)} códigos activos.")
     except Exception as e:
         import traceback
         print(f"Error cargando presupuestos desde Google Sheets: {type(e).__name__}: {e!r}")
@@ -377,36 +405,48 @@ def parse_message(texto_original: str):
 
 def parse_directo(texto_original: str):
     """Detecta 'cuenta categoría monto [comentario]' en cualquier orden dentro del texto,
-    ej: 'Lindo cafecitos 5.000 Starbucks' o 'Starbucks 5.000, cafecitos de Lindo'."""
+    ej: 'Lindo cafecitos 5.000 Starbucks' o 'Starbucks 5.000, cafecitos de Lindo'.
+    También reconoce un código directo de la pestaña Presupuestos, ej: 'LN01 5.000 Starbucks'."""
     texto_norm = normalizar_texto(texto_original)
 
     cuenta_encontrada = None
-    cuenta_match = None
-    for cuenta in CUENTAS_CONFIG:
-        cuenta_norm = normalizar_texto(cuenta)
-        m = re.search(rf"\b{re.escape(cuenta_norm)}\b", texto_norm)
-        if m:
-            cuenta_encontrada = cuenta
-            cuenta_match = texto_original[m.start():m.end()]
-            break
-    if not cuenta_encontrada:
-        return None
-
     categoria_encontrada = None
+    cuenta_match = None
     categoria_match = None
-    for cat in CUENTAS_CONFIG[cuenta_encontrada]["categorias"]:
-        candidatos = [cat] + SINONIMOS_CATEGORIA.get(cat, [])
-        for candidato in candidatos:
-            cand_norm = normalizar_texto(candidato)
-            m = re.search(rf"\b{re.escape(cand_norm)}\b", texto_norm)
-            if m:
-                categoria_encontrada = cat
-                categoria_match = texto_original[m.start():m.end()]
-                break
-        if categoria_encontrada:
+
+    # 1) ¿Hay un código de presupuesto en el mensaje? (ej: "LN01", "CA03")
+    for token in re.findall(r"\b[A-Za-z]{1,4}\d{1,3}\b", texto_original):
+        codigo = token.upper()
+        if codigo in CODIGOS:
+            cuenta_encontrada, categoria_encontrada = CODIGOS[codigo]
+            cuenta_match = categoria_match = token  # se descuenta una sola vez de la descripción
             break
-    if not categoria_encontrada:
-        return None
+
+    # 2) Si no hay código, busca por nombre de cuenta + categoría/sinónimo (como antes)
+    if not cuenta_encontrada:
+        for cuenta in CUENTAS_CONFIG:
+            cuenta_norm = normalizar_texto(cuenta)
+            m = re.search(rf"\b{re.escape(cuenta_norm)}\b", texto_norm)
+            if m:
+                cuenta_encontrada = cuenta
+                cuenta_match = texto_original[m.start():m.end()]
+                break
+        if not cuenta_encontrada:
+            return None
+
+        for cat in CUENTAS_CONFIG[cuenta_encontrada]["categorias"]:
+            candidatos = [cat] + SINONIMOS_CATEGORIA.get(cat, [])
+            for candidato in candidatos:
+                cand_norm = normalizar_texto(candidato)
+                m = re.search(rf"\b{re.escape(cand_norm)}\b", texto_norm)
+                if m:
+                    categoria_encontrada = cat
+                    categoria_match = texto_original[m.start():m.end()]
+                    break
+            if categoria_encontrada:
+                break
+        if not categoria_encontrada:
+            return None
 
     resultado_monto = extraer_monto(texto_original)
     if not resultado_monto:
@@ -414,7 +454,8 @@ def parse_directo(texto_original: str):
     monto, texto_monto = resultado_monto
 
     descripcion = texto_original
-    for patron in [cuenta_match, categoria_match, texto_monto]:
+    patrones = [cuenta_match, texto_monto] if cuenta_match == categoria_match else [cuenta_match, categoria_match, texto_monto]
+    for patron in patrones:
         descripcion = re.sub(re.escape(patron), " ", descripcion, count=1, flags=re.IGNORECASE)
     descripcion = re.sub(r"[,\.]+", " ", descripcion)
     descripcion = re.sub(r"\s+", " ", descripcion).strip(" ,.-")
@@ -521,7 +562,7 @@ async def enviar_bienvenida(to: str, nombre: str):
 async def enviar_categorias(to: str, cuenta: str):
     categorias = CUENTAS_CONFIG[cuenta]["categorias"]
     filas = [{"id": f"cat__{_slug(cuenta)}__{_slug(cat)}", "title": cat} for cat in categorias]
-    await enviar_lista(to, f"Gastos {cuenta} — ¿en qué categoría?", "Elegir categoría", filas)
+    await enviar_lista(to, f"Buenísimo, ¿en qué se fue la plata de {cuenta}?", "Elegir categoría", filas)
 
 SALUDOS = {"hola", "hi", "hey", "buenas", "menu", "menú", "hello", "buenos dias",
            "buenos días", "buenas tardes", "buenas noches"}
@@ -563,7 +604,7 @@ def _confirmacion(gasto: dict) -> str:
     if gasto.get("cuenta"):
         partes.append(gasto["cuenta"])
     partes.append(gasto["categoria"])
-    texto = f"✅ {' · '.join(partes)} {fmt_monto(gasto['monto'])}"
+    texto = f"✅ ¡Anotado! {' · '.join(partes)} {fmt_monto(gasto['monto'])}"
     if gasto.get("descripcion"):
         texto += f" ({gasto['descripcion']})"
     return texto
@@ -600,9 +641,9 @@ def _emoji_progreso(total: float, limite) -> str:
 # Umbrales de aviso, de mayor a menor — se manda solo el más alto que corresponda,
 # para no repetir 3 mensajes por el mismo gasto.
 UMBRALES_AVISO = [
-    (1.00, "🔴", "¡Se pasaron del presupuesto"),
-    (0.90, "🟠", "Cuidado, van en el 90% del presupuesto"),
-    (0.75, "🟡", "Ojo, ya llevan el 75% del presupuesto"),
+    (1.00, "🔴", "se pasaron un poquito del presupuesto"),
+    (0.90, "🟠", "ojo, ya van en el 90% del presupuesto"),
+    (0.75, "🟡", "cariño, ya llevan el 75% del presupuesto"),
 ]
 
 def _mensaje_umbral(nombre: str, total: float, limite) -> str:
@@ -611,10 +652,11 @@ def _mensaje_umbral(nombre: str, total: float, limite) -> str:
     pct = total / limite
     for umbral, emoji, texto in UMBRALES_AVISO:
         if pct >= umbral:
+            frase = f"{texto[0].upper()}{texto[1:]}"
             if umbral >= 1.0:
-                return (f"{emoji} {texto} de *{nombre}*: {fmt_monto(total)} / {fmt_monto(limite)} "
+                return (f"{emoji} {frase} de *{nombre}*: {fmt_monto(total)} / {fmt_monto(limite)} "
                          f"(+{fmt_monto(total - limite)})")
-            return f"{emoji} {texto} de *{nombre}*: {fmt_monto(total)} / {fmt_monto(limite)}"
+            return f"{emoji} {frase} de *{nombre}*: {fmt_monto(total)} / {fmt_monto(limite)}"
     return None
 
 def _avisos_presupuesto(gasto: dict) -> list:
@@ -671,7 +713,7 @@ def _estado_texto(gasto: dict):
 def construir_resumen() -> str:
     ahora = datetime.now(timezone.utc)
     mes_label = f"{MESES_ES.get(ahora.month, ahora.month)} {ahora.year}"
-    lineas = [f"📊 Resumen de {mes_label}"]
+    lineas = [f"📊 Así vamos en {mes_label}"]
 
     for cuenta, config in CUENTAS_CONFIG.items():
         lineas.append(f"\n*{cuenta}*")
@@ -747,7 +789,7 @@ async def recibir_mensaje(request: Request):
             slug = reply_id[len("cuenta_"):]
             cuenta = _cuenta_por_slug(slug)
             if not cuenta:
-                await enviar_mensaje(numero, "No reconocí esa cuenta, escribe *hola* para intentar de nuevo.")
+                await enviar_mensaje(numero, "Mmm, esa cuenta no la tengo 😅 escríbeme *hola* y probamos de nuevo.")
                 return {"status": "ok"}
             sesiones[numero] = {"cuenta": cuenta}
             await enviar_categorias(numero, cuenta)
@@ -759,22 +801,22 @@ async def recibir_mensaje(request: Request):
             cuenta = _cuenta_por_slug(cuenta_slug)
             categoria = _categoria_por_slug(cuenta, cat_slug)
             if not cuenta or not categoria:
-                await enviar_mensaje(numero, "No reconocí esa categoría, escribe *hola* para intentar de nuevo.")
+                await enviar_mensaje(numero, "Uy, esa categoría no la pesqué 😅 escríbeme *hola* y probamos de nuevo.")
                 return {"status": "ok"}
             sesiones[numero] = {"cuenta": cuenta, "categoria": categoria}
             limite = CUENTAS_CONFIG[cuenta]["categorias"].get(categoria)
             extra = f" (presupuesto {fmt_monto(limite)})" if limite else ""
             await enviar_mensaje(
                 numero,
-                f"¿Cuánto gastaron en {categoria}{extra}? Puedes agregar un comentario, ej: \"8.500 cena con amigas\"",
+                f"Dale, {categoria}{extra} 💛 ¿Cuánto fue? (cuéntame en qué si quieres, ej: \"8.500 cena con amigas\")",
             )
             return {"status": "ok"}
 
-        await enviar_mensaje(numero, "No entendí esa opción, escribe *hola* para empezar de nuevo.")
+        await enviar_mensaje(numero, "Uy, no entendí esa opción 😅 escríbeme *hola* y empezamos de nuevo.")
         return {"status": "ok"}
 
     if mensaje.get("type") != "text":
-        await enviar_mensaje(numero, 'Por ahora solo entiendo mensajes de texto tipo "comida 5.000" 🙂')
+        await enviar_mensaje(numero, 'Por ahora solo entiendo mensajes de texto, amor — mándame algo tipo "comida 5.000" 🙂')
         return {"status": "ok"}
 
     texto = mensaje["text"]["body"]
@@ -798,7 +840,20 @@ async def recibir_mensaje(request: Request):
             await enviar_mensaje(numero, "No tengo Google Sheets conectado todavía 🤔")
             return {"status": "ok"}
         await sincronizar_todo()
-        await enviar_mensaje(numero, f"🔄 Sincronizado con la planilla — {len(gastos)} gastos en total.")
+        await enviar_mensaje(numero, f"🔄 Listo, sincronicé todo con la planilla — llevamos {len(gastos)} gastos anotados.")
+        return {"status": "ok"}
+
+    # ── Código de presupuesto solo, sin monto (ej: "LN01") → arma la sesión y pide el monto ──
+    codigo_directo = texto.strip().upper()
+    if codigo_directo in CODIGOS:
+        cuenta, categoria = CODIGOS[codigo_directo]
+        sesiones[numero] = {"cuenta": cuenta, "categoria": categoria}
+        limite = CUENTAS_CONFIG[cuenta]["categorias"].get(categoria)
+        extra = f" (presupuesto {fmt_monto(limite)})" if limite else ""
+        await enviar_mensaje(
+            numero,
+            f"Dale, {categoria} de {cuenta}{extra} 💛 ¿Cuánto fue? (puedes contarme en qué, ej: \"8.500 cena con amigas\")",
+        )
         return {"status": "ok"}
 
     # ── Atajo: detecta 'cuenta categoría monto' directo en el texto (ej: "Lindo cafecitos 5.000 Starbucks") ──
@@ -820,7 +875,7 @@ async def recibir_mensaje(request: Request):
     if sesion.get("cuenta") and sesion.get("categoria"):
         resultado_monto = extraer_monto(texto)
         if not resultado_monto:
-            await enviar_mensaje(numero, "No encontré un monto ahí 🤔 Mándame el número, ej: 5.000 (puedes agregar un comentario)")
+            await enviar_mensaje(numero, "No pesqué el monto ahí 🤔 mándame el número, ej: 5.000 (puedes contarme en qué fue igual)")
             return {"status": "ok"}
         monto, texto_monto = resultado_monto
         descripcion = re.sub(r"\s+", " ", texto.replace(texto_monto, "")).strip() or None
@@ -842,7 +897,7 @@ async def recibir_mensaje(request: Request):
     if not parsed:
         await enviar_mensaje(
             numero,
-            'No encontré un monto en tu mensaje 🤔\nEscribe *hola* para usar los botones, o mándalo así: '
+            'Mmm, no pesqué el monto ahí 🤔 Escríbeme *hola* para usar los botones, o mándalo así: '
             '"categoría descripción monto" (ej: "comida almuerzo 5.000")',
         )
         return {"status": "ok"}
