@@ -99,7 +99,9 @@ def _cargar_desde_sheet():
                 _procesados_wa_ids.add(g["wa_message_id"])
         print(f"Google Sheets: {len(gastos)} gastos restaurados desde la planilla.")
     except Exception as e:
-        print(f"Error cargando desde Google Sheets: {e}")
+        import traceback
+        print(f"Error cargando desde Google Sheets: {type(e).__name__}: {e!r}")
+        traceback.print_exc()
 
 def _guardar_en_sheet_sync(gasto: dict):
     try:
@@ -109,7 +111,9 @@ def _guardar_en_sheet_sync(gasto: dict):
             gasto["member_phone"], gasto.get("mensaje_original") or "", gasto.get("wa_message_id") or "",
         ], value_input_option="USER_ENTERED")
     except Exception as e:
-        print(f"Error guardando en Google Sheets: {e}")
+        import traceback
+        print(f"Error guardando en Google Sheets: {type(e).__name__}: {e!r}")
+        traceback.print_exc()
 
 async def guardar_en_sheet(gasto: dict):
     """No bloquea el resto del bot si Google Sheets está lento o falla."""
