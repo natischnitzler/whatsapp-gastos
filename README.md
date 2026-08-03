@@ -71,17 +71,43 @@ CUENTAS_CONFIG = {
 - `presupuesto_total` (opcional): si lo pones, además avisa cuando la **cuenta completa**
   se pasa de ese monto, aunque ninguna categoría individual se haya pasado.
 - Una categoría con `None` como presupuesto queda **sin límite** (solo se registra, nunca avisa).
-- **Aviso al tiro:** apenas un gasto hace que se pasen del presupuesto (de la categoría o
-  del total de la cuenta), llega un mensaje de advertencia extra.
+- **Aviso al tiro, en 3 niveles:** apenas un gasto hace que la categoría (o la
+  cuenta completa) cruce el 75%, el 90% o el 100% del presupuesto, llega un
+  mensaje de advertencia — 🟡 a los 75%, 🟠 a los 90%, 🔴 al pasarse. Si ya están
+  sobre un umbral, cada gasto nuevo en esa categoría lo recuerda de nuevo.
 - **Resumen a pedido:** escribe `resumen` (o `presupuesto`, `como vamos`, `balance`) y el
-  bot manda el estado completo, cuenta por cuenta, con semáforo:
-  🟢 vas bien &nbsp;·&nbsp; 🟡 sobre el 80% &nbsp;·&nbsp; 🔴 te pasaste &nbsp;·&nbsp; ⚪ sin límite
+  bot manda el estado completo, cuenta por cuenta, con el mismo semáforo:
+  🟢 vas bien &nbsp;·&nbsp; 🟡 75% &nbsp;·&nbsp; 🟠 90% &nbsp;·&nbsp; 🔴 te pasaste &nbsp;·&nbsp; ⚪ sin límite
 - El dashboard también muestra barras de progreso con la misma info.
 
 ⚠️ Los gastos registrados con el **formato libre** (sin pasar por los botones de "hola")
 usan categorías genéricas aparte (`CATEGORIAS_LIBRES`: Comida, Transporte, etc.) y **no
 cuentan para estos presupuestos** — quedan sin cuenta asignada. Para que sí cuenten, hay
 que usar los botones.
+
+## Definir los presupuestos desde el Excel (Google Sheets)
+
+Si conectaste Google Sheets (Paso 0), el bot crea automáticamente una **segunda
+pestaña llamada "Presupuestos"** en la misma planilla, prellenada con los montos
+que ya tenías en `CUENTAS_CONFIG`. Columnas: `Cuenta`, `Categoria`, `Presupuesto`.
+
+- Una fila con **Categoria en blanco** = el tope general de esa cuenta
+- Dejar **Presupuesto en blanco** = sin límite para esa categoría
+- Editar cualquier monto ahí y listo — el bot lo relee:
+  - automáticamente cada vez que alguien pide `resumen`
+  - o al tiro si escriben `sincronizar` (ver abajo)
+- Las categorías en sí (los nombres) siguen definiéndose en `main.py` — la
+  planilla solo controla los **montos**, no agrega categorías nuevas.
+
+## Compartido entre celulares, y sincronización manual
+
+- El presupuesto es **por cuenta**, no por teléfono: si tu pareja registra un
+  gasto de "Casa" desde su celular, suma al mismo total de Casa que ves tú.
+- Todo gasto (de cualquier celular) se escribe en la misma planilla.
+- ⚠️ Si agregas una fila **a mano** directamente en la pestaña de gastos, el bot
+  **no se entera altiro** — solo lee la planilla al arrancar el servidor. Escribe
+  `sincronizar` (o `actualizar`, `recargar`) para forzar que recargue todo
+  (gastos + presupuestos) sin esperar un reinicio.
 
 ---
 

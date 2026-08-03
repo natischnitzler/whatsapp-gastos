@@ -141,6 +141,7 @@
   .presupuesto-bar { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
   .presupuesto-bar.ok { background: #6b8068; }
   .presupuesto-bar.alerta { background: var(--brass); }
+  .presupuesto-bar.critico { background: #c07a2e; }
   .presupuesto-bar.pasado { background: var(--stamp-red); }
 
 
@@ -256,7 +257,13 @@
   function barraPresupuesto(item) {
     const tienePresupuesto = item.presupuesto != null && item.presupuesto > 0;
     const pct = tienePresupuesto ? Math.min((item.gastado / item.presupuesto) * 100, 100) : 0;
-    const clase = !tienePresupuesto ? 'ok' : (item.gastado > item.presupuesto ? 'pasado' : (item.gastado / item.presupuesto >= 0.8 ? 'alerta' : 'ok'));
+    let clase = 'ok';
+    if (tienePresupuesto) {
+      const ratio = item.gastado / item.presupuesto;
+      if (ratio >= 1) clase = 'pasado';
+      else if (ratio >= 0.90) clase = 'critico';
+      else if (ratio >= 0.75) clase = 'alerta';
+    }
     const exceso = tienePresupuesto && item.gastado > item.presupuesto ? ` <span style="color:var(--stamp-red)">(+${fmt(item.gastado - item.presupuesto)})</span>` : '';
     const montos = tienePresupuesto ? `${fmt(item.gastado)} / ${fmt(item.presupuesto)}${exceso}` : fmt(item.gastado);
     return `

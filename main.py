@@ -13,6 +13,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 @app.on_event("startup")
 async def _al_iniciar():
     await asyncio.to_thread(_cargar_desde_sheet)
+    await asyncio.to_thread(_cargar_presupuestos_desde_sheet)
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 WA_VERIFY_TOKEN    = os.environ.get("WA_VERIFY_TOKEN", "")
@@ -48,9 +49,9 @@ _hoja_cache = {}
 def sheets_configurado() -> bool:
     return bool(GOOGLE_SHEET_ID and GOOGLE_SERVICE_ACCOUNT_JSON)
 
-def _hoja():
-    """Cliente de la hoja (lazy, se conecta solo la primera vez que se usa)."""
-    if "ws" not in _hoja_cache:
+def _spreadsheet():
+    """Cliente de la planilla completa (lazy, se conecta solo la primera vez)."""
+    if "sh" not in _hoja_cache:
         import gspread
         from google.oauth2.service_account import Credentials
         info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
@@ -58,8 +59,13 @@ def _hoja():
             info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
         gc = gspread.authorize(creds)
-        sh = gc.open_by_key(GOOGLE_SHEET_ID)
-        ws = sh.sheet1
+        _hoja_cache["sh"] = gc.open_by_key(GOOGLE_SHEET_ID)
+    return _hoja_cache["sh"]
+
+def _hoja():
+    """Pestaña de gastos (la primera de la planilla)."""
+    if "ws" not in _hoja_cache:
+        ws = _spreadsheet().sheet1
         if not ws.row_values(1):
             ws.append_row(SHEET_HEADERS)
         _hoja_cache["ws"] = ws
@@ -121,6 +127,14 @@ async def guardar_en_sheet(gasto: dict):
         return
     await asyncio.to_thread(_guardar_en_sheet_sync, gasto)
 
+async def sincronizar_todo():
+    """Recarga gastos y presupuestos desde la planilla (útil si editaron algo a mano en Sheets)."""
+    if not sheets_configurado():
+        return False
+    await asyncio.to_thread(_cargar_desde_sheet)
+    await asyncio.to_thread(_cargar_presupuestos_desde_sheet)
+    return True
+
 MESES_ES = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
             7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"}
 
@@ -159,6 +173,57 @@ CUENTAS_CONFIG = {
         },
     },
 }
+
+def _hoja_presupuestos():
+    """Pestaña 'Presupuestos' — se crea sola la primera vez, prellenada con los valores actuales."""
+    if "ws_presupuestos" not in _hoja_cache:
+        import gspread
+        sh = _spreadsheet()
+        try:
+            ws = sh.worksheet("Presupuestos")
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title="Presupuestos", rows=50, cols=3)
+            ws.append_row(["Cuenta", "Categoria", "Presupuesto"])
+            filas = []
+            for cuenta, config in CUENTAS_CONFIG.items():
+                filas.append([cuenta, "", config.get("presupuesto_total") or ""])
+                for cat, limite in config["categorias"].items():
+                    filas.append([cuenta, cat, limite if limite else ""])
+            ws.append_rows(filas)
+        _hoja_cache["ws_presupuestos"] = ws
+    return _hoja_cache["ws_presupuestos"]
+
+def _cargar_presupuestos_desde_sheet():
+    """Sobrescribe los montos de CUENTAS_CONFIG con lo que esté en la pestaña 'Presupuestos'.
+    Deja la fila de Categoria en blanco para el tope general de la cuenta."""
+    if not sheets_configurado():
+        return
+    try:
+        ws = _hoja_presupuestos()
+        filas = ws.get_all_records()
+        actualizados = 0
+        for fila in filas:
+            cuenta = str(fila.get("Cuenta", "")).strip()
+            categoria = str(fila.get("Categoria", "")).strip()
+            presupuesto_raw = str(fila.get("Presupuesto", "")).strip()
+            if cuenta not in CUENTAS_CONFIG:
+                continue
+            try:
+                presupuesto = float(presupuesto_raw.replace(",", ".")) if presupuesto_raw else None
+            except ValueError:
+                continue
+            if categoria:
+                if categoria in CUENTAS_CONFIG[cuenta]["categorias"]:
+                    CUENTAS_CONFIG[cuenta]["categorias"][categoria] = presupuesto
+                    actualizados += 1
+            else:
+                CUENTAS_CONFIG[cuenta]["presupuesto_total"] = presupuesto
+                actualizados += 1
+        print(f"Presupuestos: {actualizados} valores actualizados desde la planilla.")
+    except Exception as e:
+        import traceback
+        print(f"Error cargando presupuestos desde Google Sheets: {type(e).__name__}: {e!r}")
+        traceback.print_exc()
 
 # Categorías genéricas SOLO para cuando alguien escribe texto libre (sin pasar
 # por los botones) — no están ligadas a presupuestos, es un fallback aparte.
@@ -448,6 +513,8 @@ SALUDOS = {"hola", "hi", "hey", "buenas", "menu", "menú", "hello", "buenos dias
 
 RESUMEN_PALABRAS = {"resumen", "presupuesto", "presupuestos", "como vamos", "cómo vamos", "balance"}
 
+SYNC_PALABRAS = {"sincronizar", "actualizar", "recargar"}
+
 def _nombre_de(numero: str, value: dict) -> str:
     profile_name = None
     try:
@@ -509,9 +576,31 @@ def _emoji_progreso(total: float, limite) -> str:
     pct = total / limite
     if pct >= 1:
         return "🔴"
-    if pct >= 0.8:
+    if pct >= 0.90:
+        return "🟠"
+    if pct >= 0.75:
         return "🟡"
     return "🟢"
+
+# Umbrales de aviso, de mayor a menor — se manda solo el más alto que corresponda,
+# para no repetir 3 mensajes por el mismo gasto.
+UMBRALES_AVISO = [
+    (1.00, "🔴", "¡Se pasaron del presupuesto"),
+    (0.90, "🟠", "Cuidado, van en el 90% del presupuesto"),
+    (0.75, "🟡", "Ojo, ya llevan el 75% del presupuesto"),
+]
+
+def _mensaje_umbral(nombre: str, total: float, limite) -> str:
+    if not limite or limite <= 0:
+        return None
+    pct = total / limite
+    for umbral, emoji, texto in UMBRALES_AVISO:
+        if pct >= umbral:
+            if umbral >= 1.0:
+                return (f"{emoji} {texto} de *{nombre}*: {fmt_monto(total)} / {fmt_monto(limite)} "
+                         f"(+{fmt_monto(total - limite)})")
+            return f"{emoji} {texto} de *{nombre}*: {fmt_monto(total)} / {fmt_monto(limite)}"
+    return None
 
 def _avisos_presupuesto(gasto: dict) -> list:
     avisos = []
@@ -523,22 +612,17 @@ def _avisos_presupuesto(gasto: dict) -> list:
     config = CUENTAS_CONFIG[cuenta]
 
     limite_cat = config["categorias"].get(categoria)
-    if limite_cat:
-        total_cat = total_categoria_en_cuenta(cuenta, categoria)
-        if total_cat > limite_cat:
-            avisos.append(
-                f"⚠️ Se pasaron del presupuesto de *{categoria}* ({cuenta}): "
-                f"{fmt_monto(total_cat)} / {fmt_monto(limite_cat)} (+{fmt_monto(total_cat - limite_cat)})"
-            )
+    total_cat = total_categoria_en_cuenta(cuenta, categoria)
+    msg_cat = _mensaje_umbral(categoria, total_cat, limite_cat)
+    if msg_cat:
+        avisos.append(msg_cat)
 
     limite_total = config.get("presupuesto_total")
-    if limite_total:
-        total = total_cuenta(cuenta)
-        if total > limite_total:
-            avisos.append(
-                f"⚠️ Se pasaron del presupuesto general de *{cuenta}*: "
-                f"{fmt_monto(total)} / {fmt_monto(limite_total)} (+{fmt_monto(total - limite_total)})"
-            )
+    total_c = total_cuenta(cuenta)
+    msg_cuenta = _mensaje_umbral(f"la cuenta {cuenta}", total_c, limite_total)
+    if msg_cuenta:
+        avisos.append(msg_cuenta)
+
     return avisos
 
 def _estado_texto(gasto: dict):
@@ -686,9 +770,20 @@ async def recibir_mensaje(request: Request):
         await enviar_bienvenida(numero, nombre)
         return {"status": "ok"}
 
-    # ── Pedir el resumen de presupuestos ──
+    # ── Pedir el resumen de presupuestos (refresca los montos desde Sheets primero) ──
     if texto_lower in RESUMEN_PALABRAS:
+        if sheets_configurado():
+            await asyncio.to_thread(_cargar_presupuestos_desde_sheet)
         await enviar_mensaje(numero, construir_resumen())
+        return {"status": "ok"}
+
+    # ── Forzar resincronización manual con la planilla (por si editaron algo a mano) ──
+    if texto_lower in SYNC_PALABRAS:
+        if not sheets_configurado():
+            await enviar_mensaje(numero, "No tengo Google Sheets conectado todavía 🤔")
+            return {"status": "ok"}
+        await sincronizar_todo()
+        await enviar_mensaje(numero, f"🔄 Sincronizado con la planilla — {len(gastos)} gastos en total.")
         return {"status": "ok"}
 
     # ── Atajo: detecta 'cuenta categoría monto' directo en el texto (ej: "Lindo cafecitos 5.000 Starbucks") ──
