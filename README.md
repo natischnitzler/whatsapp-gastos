@@ -93,11 +93,27 @@ usan categorías genéricas aparte (`CATEGORIAS_LIBRES`: Comida, Transporte, etc
 cuentan para estos presupuestos** — quedan sin cuenta asignada. Para que sí cuenten, hay
 que usar los botones.
 
+## Cómo queda organizado el Excel
+
+Cada gasto se guarda en la pestaña de **su mes** (ej: "Agosto 2026", "Septiembre
+2026") — se crea sola la primera vez que hay un gasto ese mes. Columnas, en
+este orden: `Fecha`, `Cuenta`, `Categoria`, `Monto`, `Descripcion`, `Quien`.
+
+Dentro de cada pestaña, las filas quedan **agrupadas por Cuenta y luego por
+Categoria** (se reordena solo cada vez que se guarda un gasto nuevo), así es
+fácil mirar de un vistazo cuánto se fue en cada cosa.
+
+⚠️ Si venías de una versión anterior del bot con una sola pestaña de gastos con
+más columnas (Telefono, MensajeOriginal, WaMessageId), esa pestaña queda tal
+cual como respaldo histórico — el bot deja de escribirle y empieza a usar las
+pestañas por mes desde ahora. Si quieres, puedes copiar esas filas antiguas a
+mano a la pestaña del mes que correspondía.
+
 ## Definir los presupuestos (y códigos) desde el Excel
 
-Si conectaste Google Sheets (Paso 0), el bot crea automáticamente una **segunda
-pestaña llamada "Presupuestos"** en la misma planilla, prellenada con los montos
-y códigos actuales. Columnas: `Cuenta`, `Categoria`, `Presupuesto`, `Codigo`.
+Si conectaste Google Sheets (Paso 0), el bot crea automáticamente una **pestaña
+llamada "Presupuestos"** en la misma planilla, prellenada con los montos y
+códigos actuales. Columnas: `Cuenta`, `Categoria`, `Presupuesto`, `Codigo`.
 
 - Una fila con **Categoria en blanco** = el tope general de esa cuenta (sin código)
 - Dejar **Presupuesto en blanco** = sin límite para esa categoría
@@ -110,6 +126,12 @@ y códigos actuales. Columnas: `Cuenta`, `Categoria`, `Presupuesto`, `Codigo`.
   - o al tiro si escriben `sincronizar`
 - Las categorías en sí (los nombres) siguen definiéndose en `main.py` — la
   planilla controla los **montos y códigos**, no agrega categorías nuevas.
+- Si agregan una fila con una categoría que el bot no reconoce (ej: escrita
+  mal, o de una cuenta que no existe), el bot la ignora sin problema — no
+  rompe nada, simplemente no la toma en cuenta.
+- Si ya tenías esta pestaña creada de una versión anterior del bot (sin columna
+  Codigo), no te preocupes — el bot la detecta y **agrega la columna sola**, con
+  los códigos ya rellenados, la próxima vez que sincronice.
 
 ## Compartido entre celulares, y sincronización con la planilla
 

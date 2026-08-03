@@ -41,11 +41,12 @@ MIEMBROS = _parsear_miembros(MIEMBROS_RAW)
 
 # ── Google Sheets (opcional): guarda cada gasto en una planilla de Drive ──────
 # Esto también resuelve la pérdida de datos al reiniciar el servidor: al partir,
-# el bot recarga todo el historial desde la planilla.
+# el bot recarga todo el historial desde la planilla. Cada mes tiene su propia
+# pestaña (ej: "Agosto 2026"), y dentro de cada una los gastos quedan agrupados
+# por Cuenta y luego por Categoria.
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-SHEET_HEADERS = ["Fecha", "Cuenta", "Categoria", "Monto", "Descripcion", "Quien", "Telefono",
-                  "MensajeOriginal", "WaMessageId"]
+SHEET_HEADERS = ["Fecha", "Cuenta", "Categoria", "Monto", "Descripcion", "Quien"]
 _hoja_cache = {}
 
 def sheets_configurado() -> bool:
@@ -64,48 +65,64 @@ def _spreadsheet():
         _hoja_cache["sh"] = gc.open_by_key(GOOGLE_SHEET_ID)
     return _hoja_cache["sh"]
 
-def _hoja():
-    """Pestaña de gastos (la primera de la planilla)."""
-    if "ws" not in _hoja_cache:
-        ws = _spreadsheet().sheet1
-        if not ws.row_values(1):
+def _nombre_pestana_mes(dt: datetime) -> str:
+    return f"{MESES_ES.get(dt.month, dt.month).capitalize()} {dt.year}"
+
+def _es_pestana_mes(nombre: str) -> bool:
+    partes = nombre.strip().split()
+    if len(partes) != 2:
+        return False
+    mes, anio = partes
+    return mes.lower() in MESES_ES.values() and anio.isdigit()
+
+def _hoja_mes(dt: datetime):
+    """Pestaña del mes correspondiente a la fecha del gasto — se crea sola si no existe."""
+    titulo = _nombre_pestana_mes(dt)
+    cache_key = f"ws_mes::{titulo}"
+    if cache_key not in _hoja_cache:
+        import gspread
+        sh = _spreadsheet()
+        try:
+            ws = sh.worksheet(titulo)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=titulo, rows=300, cols=len(SHEET_HEADERS))
             ws.append_row(SHEET_HEADERS)
-        _hoja_cache["ws"] = ws
-    return _hoja_cache["ws"]
+        _hoja_cache[cache_key] = ws
+    return _hoja_cache[cache_key]
 
 def _cargar_desde_sheet():
-    """Al iniciar el servidor, restaura todo el historial guardado en la planilla."""
+    """Al iniciar el servidor, restaura el historial de TODAS las pestañas de mes."""
     global gastos, _next_id
     if not sheets_configurado():
         return
     try:
-        ws = _hoja()
-        filas = ws.get_all_records()  # usa la fila 1 como headers
-        cargados = []
-        for fila in filas:
-            monto_raw = fila.get("Monto", 0)
-            try:
-                monto = float(str(monto_raw).replace(",", "."))
-            except ValueError:
-                continue
-            cargados.append({
-                "id": _next_id,
-                "member_phone": str(fila.get("Telefono", "")),
-                "member_name": fila.get("Quien", ""),
-                "cuenta": fila.get("Cuenta") or None,
-                "categoria": fila.get("Categoria", ""),
-                "descripcion": fila.get("Descripcion") or None,
-                "monto": monto,
-                "mensaje_original": fila.get("MensajeOriginal", ""),
-                "wa_message_id": fila.get("WaMessageId") or None,
-                "created_at": fila.get("Fecha") or datetime.now(timezone.utc).isoformat(),
-            })
-            _next_id += 1
-        gastos = list(reversed(cargados))  # más nuevo primero
-        for g in gastos:
-            if g["wa_message_id"]:
-                _procesados_wa_ids.add(g["wa_message_id"])
-        print(f"Google Sheets: {len(gastos)} gastos restaurados desde la planilla.")
+        sh = _spreadsheet()
+        pestanas_mes = [ws for ws in sh.worksheets() if _es_pestana_mes(ws.title)]
+        todos = []
+        for ws in pestanas_mes:
+            for fila in ws.get_all_records():
+                monto_raw = fila.get("Monto", 0)
+                try:
+                    monto = float(str(monto_raw).replace(",", "."))
+                except ValueError:
+                    continue
+                todos.append({
+                    "member_phone": "",
+                    "member_name": fila.get("Quien", ""),
+                    "cuenta": fila.get("Cuenta") or None,
+                    "categoria": fila.get("Categoria", ""),
+                    "descripcion": fila.get("Descripcion") or None,
+                    "monto": monto,
+                    "mensaje_original": "",
+                    "wa_message_id": None,
+                    "created_at": fila.get("Fecha") or datetime.now(timezone.utc).isoformat(),
+                })
+        todos.sort(key=lambda g: g["created_at"], reverse=True)  # más nuevo primero
+        for i, g in enumerate(todos, start=1):
+            g["id"] = i
+        gastos = todos
+        _next_id = len(todos) + 1
+        print(f"Google Sheets: {len(gastos)} gastos restaurados desde {len(pestanas_mes)} pestañas mensuales.")
     except Exception as e:
         import traceback
         print(f"Error cargando desde Google Sheets: {type(e).__name__}: {e!r}")
@@ -113,11 +130,16 @@ def _cargar_desde_sheet():
 
 def _guardar_en_sheet_sync(gasto: dict):
     try:
-        _hoja().append_row([
+        dt = datetime.fromisoformat(gasto["created_at"])
+        ws = _hoja_mes(dt)
+        ws.append_row([
             gasto["created_at"], gasto.get("cuenta") or "", gasto["categoria"],
             gasto["monto"], gasto.get("descripcion") or "", gasto["member_name"],
-            gasto["member_phone"], gasto.get("mensaje_original") or "", gasto.get("wa_message_id") or "",
         ], value_input_option="USER_ENTERED")
+        # Reordena la pestaña agrupada por Cuenta y luego por Categoria (deja la fecha como desempate)
+        total_filas = len(ws.get_all_values())
+        if total_filas > 2:
+            ws.sort((2, "asc"), (3, "asc"), (1, "asc"), range=f"A2:F{total_filas}")
     except Exception as e:
         import traceback
         print(f"Error guardando en Google Sheets: {type(e).__name__}: {e!r}")
@@ -207,6 +229,26 @@ def _generar_codigos_iniciales() -> dict:
 # "Presupuestos" puede agregar o renombrar códigos (ver _cargar_presupuestos_desde_sheet).
 CODIGOS = _generar_codigos_iniciales()
 
+def _migrar_columna_codigo(ws):
+    """Si la pestaña 'Presupuestos' ya existía de antes (sin columna Codigo), la agrega
+    y la rellena con los códigos generados por defecto para las filas que reconozca."""
+    headers = ws.row_values(1)
+    if "Codigo" in headers:
+        return
+    col_codigo = len(headers) + 1
+    ws.update_cell(1, col_codigo, "Codigo")
+
+    inverso = {}
+    for codigo, (cu, ca) in _generar_codigos_iniciales().items():
+        inverso[(cu, ca)] = codigo
+
+    filas = ws.get_all_records()
+    for idx, fila in enumerate(filas, start=2):  # la fila 1 son los headers
+        cuenta = str(fila.get("Cuenta", "")).strip()
+        categoria = str(fila.get("Categoria", "")).strip()
+        if categoria and (cuenta, categoria) in inverso:
+            ws.update_cell(idx, col_codigo, inverso[(cuenta, categoria)])
+
 def _hoja_presupuestos():
     """Pestaña 'Presupuestos' — se crea sola la primera vez, prellenada con los valores actuales."""
     if "ws_presupuestos" not in _hoja_cache:
@@ -214,6 +256,7 @@ def _hoja_presupuestos():
         sh = _spreadsheet()
         try:
             ws = sh.worksheet("Presupuestos")
+            _migrar_columna_codigo(ws)
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title="Presupuestos", rows=50, cols=4)
             ws.append_row(["Cuenta", "Categoria", "Presupuesto", "Codigo"])
