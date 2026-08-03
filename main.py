@@ -1,7 +1,7 @@
 import os
 import re
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -107,6 +107,14 @@ def normalizar_numero(n: str) -> str:
 
 def fmt_monto(n) -> str:
     return "$" + f"{int(n):,}".replace(",", ".")
+
+def saludo_hora() -> str:
+    hora = datetime.now(timezone(timedelta(hours=-4))).hour  # hora de Chile
+    if hora < 12:
+        return "🌅 Buenos días"
+    if hora < 19:
+        return "☀️ Buenas tardes"
+    return "🌙 Buenas noches"
 
 def normalizar_texto(texto: str) -> str:
     t = texto.lower()
@@ -248,10 +256,15 @@ async def enviar_lista(to: str, texto: str, boton_titulo: str, filas: list):
             fallback = texto + "\n\n" + "\n".join([f"• {f['title']}" for f in filas])
             await enviar_mensaje(to, fallback)
 
-async def enviar_bienvenida(to: str):
+async def enviar_bienvenida(to: str, nombre: str):
     sesiones[to] = {}
+    saludo = saludo_hora()
+    texto = (
+        f"{saludo}, {nombre}! 👋\n"
+        f"Escribe *resumen* si quieres ver el presupuesto, o elige una cuenta para registrar un gasto:"
+    )
     botones = [{"id": f"cuenta_{_slug(c)}", "title": f"Gastos {c}"} for c in CUENTAS_CONFIG]
-    await enviar_botones(to, "¡Hola! 👋 ¿A qué cuenta va este gasto?", botones)
+    await enviar_botones(to, texto, botones)
 
 async def enviar_categorias(to: str, cuenta: str):
     categorias = CUENTAS_CONFIG[cuenta]["categorias"]
@@ -354,6 +367,21 @@ def _avisos_presupuesto(gasto: dict) -> list:
                 f"{fmt_monto(total)} / {fmt_monto(limite_total)} (+{fmt_monto(total - limite_total)})"
             )
     return avisos
+
+def _saldo_texto(gasto: dict):
+    """Si no se pasaron del presupuesto, dice cuánto les queda en esa categoría."""
+    cuenta = gasto.get("cuenta")
+    categoria = gasto.get("categoria")
+    if not cuenta or cuenta not in CUENTAS_CONFIG:
+        return None
+    limite = CUENTAS_CONFIG[cuenta]["categorias"].get(categoria)
+    if not limite:
+        return None
+    total = total_categoria_en_cuenta(cuenta, categoria)
+    restante = limite - total
+    if restante < 0:
+        return None  # ya se pasaron, eso lo cubre el aviso de sobregiro
+    return f"💰 Quedan {fmt_monto(restante)} de {fmt_monto(limite)} en {categoria}"
 
 def construir_resumen() -> str:
     ahora = datetime.now(timezone.utc)
@@ -469,7 +497,7 @@ async def recibir_mensaje(request: Request):
 
     # ── Saludo → muestra los botones de cuenta ──
     if texto_lower in SALUDOS:
-        await enviar_bienvenida(numero)
+        await enviar_bienvenida(numero, nombre)
         return {"status": "ok"}
 
     # ── Pedir el resumen de presupuestos ──
@@ -489,8 +517,13 @@ async def recibir_mensaje(request: Request):
         gasto = _guardar_gasto(numero, nombre, sesion["cuenta"], sesion["categoria"],
                                 monto, descripcion, texto, wa_id)
         await enviar_mensaje(numero, _confirmacion(gasto))
-        for aviso in _avisos_presupuesto(gasto):
+        avisos = _avisos_presupuesto(gasto)
+        for aviso in avisos:
             await enviar_mensaje(numero, aviso)
+        if not avisos:
+            saldo = _saldo_texto(gasto)
+            if saldo:
+                await enviar_mensaje(numero, saldo)
         sesiones[numero] = {}  # limpia la sesión, listo para el próximo gasto
         return {"status": "ok"}
 

@@ -14,10 +14,13 @@ por ahora queda tal como lo pediste.
 
 **Opción 1 — con botones (recomendado):**
 1. Escribe `hola` (o `hi`, `menu`, `buenas`)
-2. Te aparecen 3 botones: *Gastos Casa*, *Gastos Lindo*, *Gastos Linda*
+2. Te saluda por tu nombre y según la hora (🌅 Buenos días / ☀️ Buenas tardes / 🌙 Buenas noches,
+   hora de Chile), y te muestra 3 botones: *Gastos Casa*, *Gastos Lindo*, *Gastos Linda*
+   (el nombre sale de la variable `MIEMBROS`; si tu número no está ahí, usa el nombre de tu perfil de WhatsApp)
 3. Tocas uno → te aparece una lista con las categorías
-4. Eliges categoría → te pregunta el monto
-5. Escribes el monto (puedes agregar una descripción, ej: `almuerzo 8.500`) → queda guardado
+4. Eliges categoría → te dice el presupuesto y pregunta el monto
+5. Escribes el monto (puedes agregar una descripción, ej: `almuerzo 8.500`) → queda guardado,
+   y te dice cuánto les queda en esa categoría (o el aviso de sobregiro si ya se pasaron)
 
 **Opción 2 — texto libre (sigue funcionando igual que antes):**
 `<lo que quieras> <categoría> <monto>` — el parser busca el **último número**
