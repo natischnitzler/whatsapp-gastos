@@ -99,15 +99,19 @@ que ya tenías en `CUENTAS_CONFIG`. Columnas: `Cuenta`, `Categoria`, `Presupuest
 - Las categorías en sí (los nombres) siguen definiéndose en `main.py` — la
   planilla solo controla los **montos**, no agrega categorías nuevas.
 
-## Compartido entre celulares, y sincronización manual
+## Compartido entre celulares, y sincronización con la planilla
 
 - El presupuesto es **por cuenta**, no por teléfono: si tu pareja registra un
   gasto de "Casa" desde su celular, suma al mismo total de Casa que ves tú.
-- Todo gasto (de cualquier celular) se escribe en la misma planilla.
-- ⚠️ Si agregas una fila **a mano** directamente en la pestaña de gastos, el bot
-  **no se entera altiro** — solo lee la planilla al arrancar el servidor. Escribe
-  `sincronizar` (o `actualizar`, `recargar`) para forzar que recargue todo
-  (gastos + presupuestos) sin esperar un reinicio.
+- Todo gasto (de cualquier celular) se escribe en la misma planilla, casi al
+  tiro (menos de un segundo después de confirmarlo por WhatsApp).
+- En el otro sentido — planilla → bot — se sincroniza:
+  - **Automáticamente cada 5 minutos** (mientras el servidor esté despierto),
+    configurable con la variable `SYNC_INTERVAL_MINUTOS`
+  - Al **arrancar el servidor**
+  - Cada vez que alguien pide **`resumen`** (refresca los presupuestos)
+  - Al tiro si escriben **`sincronizar`** (o `actualizar`, `recargar`) — fuerza
+    la recarga completa sin esperar el ciclo automático
 
 ---
 
@@ -172,6 +176,7 @@ corriendo siempre, no funciones serverless), la forma más simple es **Render**:
    | `MIEMBROS` | `56912345678:Cata,56998765432:Tomas` (sin espacios extra) |
    | `GOOGLE_SHEET_ID` | opcional, ver Paso 0 |
    | `GOOGLE_SERVICE_ACCOUNT_JSON` | opcional, ver Paso 0 |
+   | `SYNC_INTERVAL_MINUTOS` | opcional, cada cuántos minutos resincroniza con Sheets (default: `5`) |
 
 5. Deploy. Te da una URL tipo `https://gastos-whatsapp.onrender.com`.
 

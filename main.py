@@ -14,6 +14,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 async def _al_iniciar():
     await asyncio.to_thread(_cargar_desde_sheet)
     await asyncio.to_thread(_cargar_presupuestos_desde_sheet)
+    asyncio.create_task(_sync_periodico())
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 WA_VERIFY_TOKEN    = os.environ.get("WA_VERIFY_TOKEN", "")
@@ -21,6 +22,7 @@ WA_ACCESS_TOKEN    = os.environ.get("WA_ACCESS_TOKEN", "")
 WA_PHONE_NUMBER_ID = os.environ.get("WA_PHONE_NUMBER_ID", "")
 WA_API_BASE        = "https://graph.facebook.com/v19.0"
 ADMIN_KEY          = os.environ.get("ADMIN_KEY", "cambia-esta-clave")
+SYNC_INTERVAL_MINUTOS = float(os.environ.get("SYNC_INTERVAL_MINUTOS", "5"))
 
 # Miembros de la familia/pareja: "56912345678:Cata,56998765432:Tomas"
 MIEMBROS_RAW = os.environ.get("MIEMBROS", "")
@@ -134,6 +136,19 @@ async def sincronizar_todo():
     await asyncio.to_thread(_cargar_desde_sheet)
     await asyncio.to_thread(_cargar_presupuestos_desde_sheet)
     return True
+
+async def _sync_periodico():
+    """Corre en segundo plano mientras el servidor esté despierto: resincroniza con la
+    planilla cada SYNC_INTERVAL_MINUTOS, por si alguien editó algo a mano en Sheets."""
+    if not sheets_configurado():
+        return
+    while True:
+        await asyncio.sleep(SYNC_INTERVAL_MINUTOS * 60)
+        try:
+            await sincronizar_todo()
+            print(f"Sincronización automática: {len(gastos)} gastos, {SYNC_INTERVAL_MINUTOS} min de intervalo.")
+        except Exception as e:
+            print(f"Error en sincronización periódica: {type(e).__name__}: {e!r}")
 
 MESES_ES = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
             7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"}
