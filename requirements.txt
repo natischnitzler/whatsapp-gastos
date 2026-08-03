@@ -1,3 +1,5 @@
 fastapi[standard]
 uvicorn
 httpx
+gspread
+google-auth

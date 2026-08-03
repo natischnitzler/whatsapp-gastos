@@ -1,14 +1,16 @@
-# Chat de gastos por WhatsApp (sin base de datos)
+# Chat de gastos por WhatsApp
 
-Versión en Python/FastAPI, mismo estilo que el bot de Aviv: un solo `main.py`,
-todo el estado en memoria (`gastos = []`), sin base de datos externa.
+Versión en Python/FastAPI: un solo `main.py`, el estado vive en memoria
+(`gastos = []`) y, si conectas un Google Sheet (opcional pero recomendado),
+también se respalda ahí — así no se pierde nada si el servidor se reinicia.
 
-**Trade-off importante:** como no hay base de datos, los gastos viven solo en la
-memoria del proceso. Si el servidor se reinicia (nuevo deploy, o si el hosting
-"duerme" por inactividad y despierta de nuevo), **la lista de gastos se vacía**.
-Usa `/export` para respaldar cuando quieras. Si en algún momento quieres que no
-se pierda nada, dímelo y le agregamos un archivo en disco o una base de datos —
-por ahora queda tal como lo pediste.
+**Sin Google Sheets conectado:** los gastos viven solo en la memoria del proceso.
+Si el servidor se reinicia (nuevo deploy, o el hosting "duerme" por inactividad),
+**la lista se vacía**. Usa `/export` para respaldar a mano cuando quieras.
+
+**Con Google Sheets conectado (ver Paso 0 más abajo):** cada gasto se escribe
+también como fila en tu planilla, y al arrancar el servidor **recarga todo el
+historial desde ahí** — el reinicio deja de ser un problema.
 
 ## Cómo se registra un gasto
 
@@ -22,7 +24,14 @@ por ahora queda tal como lo pediste.
 5. Escribes el monto (puedes agregar una descripción, ej: `almuerzo 8.500`) → queda guardado,
    y te dice cuánto les queda en esa categoría (o el aviso de sobregiro si ya se pasaron)
 
-**Opción 2 — texto libre (sigue funcionando igual que antes):**
+**Opción 2 — texto directo, sin botones (detecta todo solo):**
+Si mencionas la cuenta y la categoría en el mismo mensaje, el bot lo reconoce al
+tiro y no hace falta tocar nada:
+- `Lindo cafecitos 5.000 Starbucks`
+- `Casa supermercado 15.000 verduras`
+- `Starbucks 3.000, cafecitos de Lindo` (el orden no importa)
+
+**Opción 3 — texto libre genérico (si no se reconoce cuenta+categoría):**
 `<lo que quieras> <categoría> <monto>` — el parser busca el **último número**
 como monto y una **palabra clave de categoría** en cualquier parte del mensaje.
 Esta opción no pregunta "cuenta" (Casa/Lindo/Linda) — queda sin asignar.
@@ -76,6 +85,36 @@ que usar los botones.
 
 ---
 
+## Paso 0 — (Opcional) Conectar Google Sheets
+
+Esto hace que cada gasto quede guardado en una planilla de tu Drive, y que el
+bot recupere todo el historial si el servidor se reinicia.
+
+1. Crea una planilla nueva en [sheets.google.com](https://sheets.google.com), ponle
+   un nombre (ej: "Gastos Familia"). No hace falta que le pongas encabezados, el
+   bot los crea solo la primera vez.
+2. Copia el **ID de la planilla**: es la parte de la URL entre `/d/` y `/edit`.
+   Ej: `https://docs.google.com/spreadsheets/d/`**`1AbCdEfGhIjKlMnOpQrStUvWxYz`**`/edit`
+3. Ve a [console.cloud.google.com](https://console.cloud.google.com) → crea un
+   proyecto nuevo (o usa uno existente) → en el buscador escribe **"Google Sheets API"**
+   → **Habilitar**.
+4. En el menú lateral: **APIs y servicios → Credenciales → Crear credenciales →
+   Cuenta de servicio**. Ponle un nombre (ej: "bot-gastos") → **Crear y continuar**
+   → **Listo** (no hace falta darle roles).
+5. Click en la cuenta de servicio recién creada → pestaña **Claves** → **Agregar
+   clave → Crear clave nueva → JSON** → se descarga un archivo `.json`.
+6. Abre ese archivo con un editor de texto y busca el campo `"client_email"` —
+   copia ese correo (algo como `bot-gastos@tu-proyecto.iam.gserviceaccount.com`).
+7. Vuelve a tu planilla de Google Sheets → botón **Compartir** → pega ese correo
+   y dale permiso de **Editor**.
+8. En Render (Paso 2 más abajo), agrega dos variables de entorno:
+   - `GOOGLE_SHEET_ID`: el ID que copiaste en el punto 2
+   - `GOOGLE_SERVICE_ACCOUNT_JSON`: pega el **contenido completo** del archivo
+     `.json` descargado, como una sola línea (ábrelo, selecciona todo, copia y pega)
+
+Si no configuras esto, el bot sigue funcionando igual, solo que en memoria (ver
+advertencia arriba).
+
 ## Paso 1 — Meta WhatsApp Cloud API
 
 1. [developers.facebook.com](https://developers.facebook.com) → **Mis Apps → Crear app → Negocio**.
@@ -105,13 +144,14 @@ corriendo siempre, no funciones serverless), la forma más simple es **Render**:
    | `WA_PHONE_NUMBER_ID` | el Phone number ID de Meta |
    | `ADMIN_KEY` | otra clave para los endpoints de admin (`/export`, `/reset`) |
    | `MIEMBROS` | `56912345678:Cata,56998765432:Tomas` (sin espacios extra) |
+   | `GOOGLE_SHEET_ID` | opcional, ver Paso 0 |
+   | `GOOGLE_SERVICE_ACCOUNT_JSON` | opcional, ver Paso 0 |
 
 5. Deploy. Te da una URL tipo `https://gastos-whatsapp.onrender.com`.
 
 > ⚠️ El plan gratis de Render "duerme" el servicio tras ~15 min sin tráfico y lo
-> despierta en el próximo request (tarda unos segundos) — y al despertar, si fue
-> un reinicio real, la memoria se resetea. Si esto te complica, aviso y vemos
-> plan pago o agregar persistencia.
+> despierta en el próximo request (tarda unos segundos). Si conectaste Google
+> Sheets (Paso 0), el historial se recupera solo al despertar; si no, se pierde.
 
 ## Paso 3 — Conectar el webhook en Meta
 

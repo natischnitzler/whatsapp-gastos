@@ -1,5 +1,7 @@
 import os
 import re
+import json
+import asyncio
 import httpx
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Request
@@ -7,6 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+@app.on_event("startup")
+async def _al_iniciar():
+    await asyncio.to_thread(_cargar_desde_sheet)
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 WA_VERIFY_TOKEN    = os.environ.get("WA_VERIFY_TOKEN", "")
@@ -29,6 +35,87 @@ def _parsear_miembros(raw: str) -> dict:
     return miembros
 
 MIEMBROS = _parsear_miembros(MIEMBROS_RAW)
+
+# ── Google Sheets (opcional): guarda cada gasto en una planilla de Drive ──────
+# Esto también resuelve la pérdida de datos al reiniciar el servidor: al partir,
+# el bot recarga todo el historial desde la planilla.
+GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+SHEET_HEADERS = ["Fecha", "Cuenta", "Categoria", "Monto", "Descripcion", "Quien", "Telefono",
+                  "MensajeOriginal", "WaMessageId"]
+_hoja_cache = {}
+
+def sheets_configurado() -> bool:
+    return bool(GOOGLE_SHEET_ID and GOOGLE_SERVICE_ACCOUNT_JSON)
+
+def _hoja():
+    """Cliente de la hoja (lazy, se conecta solo la primera vez que se usa)."""
+    if "ws" not in _hoja_cache:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+        creds = Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(GOOGLE_SHEET_ID)
+        ws = sh.sheet1
+        if not ws.row_values(1):
+            ws.append_row(SHEET_HEADERS)
+        _hoja_cache["ws"] = ws
+    return _hoja_cache["ws"]
+
+def _cargar_desde_sheet():
+    """Al iniciar el servidor, restaura todo el historial guardado en la planilla."""
+    global gastos, _next_id
+    if not sheets_configurado():
+        return
+    try:
+        ws = _hoja()
+        filas = ws.get_all_records()  # usa la fila 1 como headers
+        cargados = []
+        for fila in filas:
+            monto_raw = fila.get("Monto", 0)
+            try:
+                monto = float(str(monto_raw).replace(",", "."))
+            except ValueError:
+                continue
+            cargados.append({
+                "id": _next_id,
+                "member_phone": str(fila.get("Telefono", "")),
+                "member_name": fila.get("Quien", ""),
+                "cuenta": fila.get("Cuenta") or None,
+                "categoria": fila.get("Categoria", ""),
+                "descripcion": fila.get("Descripcion") or None,
+                "monto": monto,
+                "mensaje_original": fila.get("MensajeOriginal", ""),
+                "wa_message_id": fila.get("WaMessageId") or None,
+                "created_at": fila.get("Fecha") or datetime.now(timezone.utc).isoformat(),
+            })
+            _next_id += 1
+        gastos = list(reversed(cargados))  # más nuevo primero
+        for g in gastos:
+            if g["wa_message_id"]:
+                _procesados_wa_ids.add(g["wa_message_id"])
+        print(f"Google Sheets: {len(gastos)} gastos restaurados desde la planilla.")
+    except Exception as e:
+        print(f"Error cargando desde Google Sheets: {e}")
+
+def _guardar_en_sheet_sync(gasto: dict):
+    try:
+        _hoja().append_row([
+            gasto["created_at"], gasto.get("cuenta") or "", gasto["categoria"],
+            gasto["monto"], gasto.get("descripcion") or "", gasto["member_name"],
+            gasto["member_phone"], gasto.get("mensaje_original") or "", gasto.get("wa_message_id") or "",
+        ], value_input_option="USER_ENTERED")
+    except Exception as e:
+        print(f"Error guardando en Google Sheets: {e}")
+
+async def guardar_en_sheet(gasto: dict):
+    """No bloquea el resto del bot si Google Sheets está lento o falla."""
+    if not sheets_configurado():
+        return
+    await asyncio.to_thread(_guardar_en_sheet_sync, gasto)
 
 MESES_ES = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
             7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"}
@@ -89,6 +176,22 @@ MONTO_REGEX = re.compile(
     r"\$?\s?(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s?(k)?",
     re.IGNORECASE,
 )
+
+# Sinónimos para que el bot reconozca la categoría aunque no escriban el nombre exacto.
+# Se buscan dentro de la cuenta ya identificada, así "Belleza" de Linda y de Lindo no se mezclan.
+SINONIMOS_CATEGORIA = {
+    "Deporte":        ["gimnasio", "gym", "pilates", "yoga", "crossfit", "entrenamiento", "zapatillas"],
+    "Salir a comer":  ["restaurant", "restaurante", "almuerzo afuera", "cena afuera", "delivery"],
+    "Belleza":        ["pelo", "peluqueria", "peluquería", "manicure", "pedicure", "spa",
+                        "corte de pelo", "unas", "uñas", "maquillaje"],
+    "Cafecitos":      ["cafe", "café", "starbucks", "cafeteria", "cafetería", "capuccino", "latte"],
+    "Salidas":        ["cine", "bar", "trago", "junta", "juntarse"],
+    "Supermercado":   ["super", "lider", "líder", "jumbo", "unimarc", "tottus", "santa isabel"],
+    "Farmacia":       ["remedios", "doctor", "cruz verde", "salcobrand", "ahumada", "medicamentos"],
+    "Perros":         ["veterinario", "paseador", "vacuna"],
+    "Regalos":        ["regalo", "cumpleanos", "cumpleaños", "cumple", "aniversario"],
+}
+
 
 # ── Estado global (en memoria — se pierde si el servidor se reinicia) ────────
 gastos: list = []
@@ -188,6 +291,63 @@ def parse_message(texto_original: str):
 
     return {"categoria": categoria, "monto": monto, "descripcion": descripcion or None}
 
+def parse_directo(texto_original: str):
+    """Detecta 'cuenta categoría monto [comentario]' en cualquier orden dentro del texto,
+    ej: 'Lindo cafecitos 5.000 Starbucks' o 'Starbucks 5.000, cafecitos de Lindo'."""
+    texto_norm = normalizar_texto(texto_original)
+
+    cuenta_encontrada = None
+    cuenta_match = None
+    for cuenta in CUENTAS_CONFIG:
+        cuenta_norm = normalizar_texto(cuenta)
+        m = re.search(rf"\b{re.escape(cuenta_norm)}\b", texto_norm)
+        if m:
+            cuenta_encontrada = cuenta
+            cuenta_match = texto_original[m.start():m.end()]
+            break
+    if not cuenta_encontrada:
+        return None
+
+    categoria_encontrada = None
+    categoria_match = None
+    for cat in CUENTAS_CONFIG[cuenta_encontrada]["categorias"]:
+        candidatos = [cat] + SINONIMOS_CATEGORIA.get(cat, [])
+        for candidato in candidatos:
+            cand_norm = normalizar_texto(candidato)
+            m = re.search(rf"\b{re.escape(cand_norm)}\b", texto_norm)
+            if m:
+                categoria_encontrada = cat
+                categoria_match = texto_original[m.start():m.end()]
+                break
+        if categoria_encontrada:
+            break
+    if not categoria_encontrada:
+        return None
+
+    resultado_monto = extraer_monto(texto_original)
+    if not resultado_monto:
+        return None
+    monto, texto_monto = resultado_monto
+
+    descripcion = texto_original
+    for patron in [cuenta_match, categoria_match, texto_monto]:
+        descripcion = re.sub(re.escape(patron), " ", descripcion, count=1, flags=re.IGNORECASE)
+    descripcion = re.sub(r"[,\.]+", " ", descripcion)
+    descripcion = re.sub(r"\s+", " ", descripcion).strip(" ,.-")
+    for _ in range(3):
+        nueva = re.sub(r"^(de|del|en|la|el)\s+", "", descripcion, flags=re.IGNORECASE)
+        nueva = re.sub(r"\s+(de|del|en|la|el)$", "", nueva, flags=re.IGNORECASE)
+        if nueva == descripcion:
+            break
+        descripcion = nueva.strip()
+
+    return {
+        "cuenta": cuenta_encontrada,
+        "categoria": categoria_encontrada,
+        "monto": monto,
+        "descripcion": descripcion or None,
+    }
+
 # ── Meta Cloud API ────────────────────────────────────────────────────────────
 async def enviar_mensaje(to: str, texto: str):
     url = f"{WA_API_BASE}/{WA_PHONE_NUMBER_ID}/messages"
@@ -256,12 +416,20 @@ async def enviar_lista(to: str, texto: str, boton_titulo: str, filas: list):
             fallback = texto + "\n\n" + "\n".join([f"• {f['title']}" for f in filas])
             await enviar_mensaje(to, fallback)
 
+RECORDATORIOS = [
+    "✨ Recuerda ahorrar para la casa",
+    "🏡 Un poquito cada día suma para la casa",
+    "💛 Vamos bien, sigan cuidando la plata de la casa",
+]
+
 async def enviar_bienvenida(to: str, nombre: str):
     sesiones[to] = {}
     saludo = saludo_hora()
+    recordatorio = RECORDATORIOS[datetime.now(timezone.utc).day % len(RECORDATORIOS)]
     texto = (
-        f"{saludo}, {nombre}! 👋\n"
-        f"Escribe *resumen* si quieres ver el presupuesto, o elige una cuenta para registrar un gasto:"
+        f"{saludo}, {nombre} 💛\n"
+        f"¿En qué gastaste? Elige una cuenta, o escribe *resumen* para ver cómo van.\n\n"
+        f"{recordatorio}"
     )
     botones = [{"id": f"cuenta_{_slug(c)}", "title": f"Gastos {c}"} for c in CUENTAS_CONFIG]
     await enviar_botones(to, texto, botones)
@@ -284,8 +452,8 @@ def _nombre_de(numero: str, value: dict) -> str:
         pass
     return MIEMBROS.get(numero, profile_name or numero)
 
-def _guardar_gasto(numero: str, nombre: str, cuenta, categoria: str, monto: float,
-                    descripcion, texto_original: str, wa_id: str) -> dict:
+async def _guardar_gasto(numero: str, nombre: str, cuenta, categoria: str, monto: float,
+                          descripcion, texto_original: str, wa_id: str) -> dict:
     global _next_id
     gasto = {
         "id": _next_id,
@@ -301,6 +469,7 @@ def _guardar_gasto(numero: str, nombre: str, cuenta, categoria: str, monto: floa
     }
     _next_id += 1
     gastos.insert(0, gasto)
+    await guardar_en_sheet(gasto)
     return gasto
 
 def _confirmacion(gasto: dict) -> str:
@@ -368,20 +537,33 @@ def _avisos_presupuesto(gasto: dict) -> list:
             )
     return avisos
 
-def _saldo_texto(gasto: dict):
-    """Si no se pasaron del presupuesto, dice cuánto les queda en esa categoría."""
+def _estado_texto(gasto: dict):
+    """Línea de estado tras guardar: progreso de la categoría + cuánto lleva la cuenta en total."""
     cuenta = gasto.get("cuenta")
     categoria = gasto.get("categoria")
     if not cuenta or cuenta not in CUENTAS_CONFIG:
         return None
-    limite = CUENTAS_CONFIG[cuenta]["categorias"].get(categoria)
-    if not limite:
-        return None
-    total = total_categoria_en_cuenta(cuenta, categoria)
-    restante = limite - total
-    if restante < 0:
-        return None  # ya se pasaron, eso lo cubre el aviso de sobregiro
-    return f"💰 Quedan {fmt_monto(restante)} de {fmt_monto(limite)} en {categoria}"
+
+    config = CUENTAS_CONFIG[cuenta]
+    partes = []
+
+    limite_cat = config["categorias"].get(categoria)
+    total_cat = total_categoria_en_cuenta(cuenta, categoria)
+    if limite_cat:
+        emoji = _emoji_progreso(total_cat, limite_cat)
+        partes.append(f"{emoji} {categoria}: {fmt_monto(total_cat)}/{fmt_monto(limite_cat)}")
+    else:
+        partes.append(f"{categoria}: {fmt_monto(total_cat)}")
+
+    total_c = total_cuenta(cuenta)
+    limite_total = config.get("presupuesto_total")
+    if limite_total:
+        emoji_total = _emoji_progreso(total_c, limite_total)
+        partes.append(f"{emoji_total} Total {cuenta}: {fmt_monto(total_c)}/{fmt_monto(limite_total)}")
+    else:
+        partes.append(f"Total {cuenta}: {fmt_monto(total_c)}")
+
+    return " · ".join(partes)
 
 def construir_resumen() -> str:
     ahora = datetime.now(timezone.utc)
@@ -505,6 +687,21 @@ async def recibir_mensaje(request: Request):
         await enviar_mensaje(numero, construir_resumen())
         return {"status": "ok"}
 
+    # ── Atajo: detecta 'cuenta categoría monto' directo en el texto (ej: "Lindo cafecitos 5.000 Starbucks") ──
+    directo = parse_directo(texto)
+    if directo:
+        gasto = await _guardar_gasto(numero, nombre, directo["cuenta"], directo["categoria"],
+                                      directo["monto"], directo["descripcion"], texto, wa_id)
+        await enviar_mensaje(numero, _confirmacion(gasto))
+        avisos = _avisos_presupuesto(gasto)
+        for aviso in avisos:
+            await enviar_mensaje(numero, aviso)
+        estado = _estado_texto(gasto)
+        if estado:
+            await enviar_mensaje(numero, estado)
+        sesiones[numero] = {}
+        return {"status": "ok"}
+
     # ── Si ya eligió cuenta + categoría, este mensaje es el monto (+ comentario opcional) ──
     if sesion.get("cuenta") and sesion.get("categoria"):
         resultado_monto = extraer_monto(texto)
@@ -514,16 +711,15 @@ async def recibir_mensaje(request: Request):
         monto, texto_monto = resultado_monto
         descripcion = re.sub(r"\s+", " ", texto.replace(texto_monto, "")).strip() or None
 
-        gasto = _guardar_gasto(numero, nombre, sesion["cuenta"], sesion["categoria"],
-                                monto, descripcion, texto, wa_id)
+        gasto = await _guardar_gasto(numero, nombre, sesion["cuenta"], sesion["categoria"],
+                                      monto, descripcion, texto, wa_id)
         await enviar_mensaje(numero, _confirmacion(gasto))
         avisos = _avisos_presupuesto(gasto)
         for aviso in avisos:
             await enviar_mensaje(numero, aviso)
-        if not avisos:
-            saldo = _saldo_texto(gasto)
-            if saldo:
-                await enviar_mensaje(numero, saldo)
+        estado = _estado_texto(gasto)
+        if estado:
+            await enviar_mensaje(numero, estado)
         sesiones[numero] = {}  # limpia la sesión, listo para el próximo gasto
         return {"status": "ok"}
 
@@ -537,8 +733,8 @@ async def recibir_mensaje(request: Request):
         )
         return {"status": "ok"}
 
-    gasto = _guardar_gasto(numero, nombre, None, parsed["categoria"], parsed["monto"],
-                            parsed["descripcion"], texto, wa_id)
+    gasto = await _guardar_gasto(numero, nombre, None, parsed["categoria"], parsed["monto"],
+                                  parsed["descripcion"], texto, wa_id)
     await enviar_mensaje(numero, _confirmacion(gasto))
 
     return {"status": "ok"}
@@ -567,7 +763,13 @@ def resumen_json():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "bot": "gastos", "gastos_registrados": len(gastos), "miembros": len(MIEMBROS)}
+    return {
+        "status": "ok",
+        "bot": "gastos",
+        "gastos_registrados": len(gastos),
+        "miembros": len(MIEMBROS),
+        "google_sheets": sheets_configurado(),
+    }
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 @app.get("/export")
