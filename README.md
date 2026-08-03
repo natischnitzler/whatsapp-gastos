@@ -10,16 +10,66 @@ Usa `/export` para respaldar cuando quieras. Si en algún momento quieres que no
 se pierda nada, dímelo y le agregamos un archivo en disco o una base de datos —
 por ahora queda tal como lo pediste.
 
-## Formato de mensaje
+## Cómo se registra un gasto
 
+**Opción 1 — con botones (recomendado):**
+1. Escribe `hola` (o `hi`, `menu`, `buenas`)
+2. Te aparecen 3 botones: *Gastos Casa*, *Gastos Lindo*, *Gastos Linda*
+3. Tocas uno → te aparece una lista con las categorías
+4. Eliges categoría → te pregunta el monto
+5. Escribes el monto (puedes agregar una descripción, ej: `almuerzo 8.500`) → queda guardado
+
+**Opción 2 — texto libre (sigue funcionando igual que antes):**
 `<lo que quieras> <categoría> <monto>` — el parser busca el **último número**
 como monto y una **palabra clave de categoría** en cualquier parte del mensaje.
+Esta opción no pregunta "cuenta" (Casa/Lindo/Linda) — queda sin asignar.
 
 - `comida almuerzo 5.000`
 - `Lindo comida 5.000`
 - `bencina 20.000`
 
-Categorías editables en `main.py`, diccionario `CATEGORIAS`.
+Categorías, cuentas y presupuestos editables en `main.py` (`CUENTAS_CONFIG`) — ver detalle abajo.
+
+## Cuentas, categorías y presupuestos
+
+Todo se configura directamente en `main.py`, en el diccionario `CUENTAS_CONFIG`:
+
+```python
+CUENTAS_CONFIG = {
+    "Casa": {
+        "presupuesto_total": None,  # sin tope general, solo por categoría
+        "categorias": {
+            "Perros": 200000, "Tali": 100000, "Farmacia": 20000,
+            "Regalos": 50000, "Supermercado": 300000, "Spid": 50000,
+        },
+    },
+    "Linda": {
+        "presupuesto_total": 350000,  # tope general de la cuenta
+        "categorias": {"Deporte": 80000, "Salir a comer": 80000, "Belleza": 30000},
+    },
+    "Lindo": {
+        "presupuesto_total": None,
+        "categorias": {"Cafecitos": 40000, "Belleza": 40000, "Salidas": 35000, "Otros": None},
+    },
+}
+```
+
+- Cada cuenta tiene sus **propias categorías con su propio presupuesto** — por eso
+  "Belleza" puede valer $30.000 en Linda y $40.000 en Lindo sin mezclarse.
+- `presupuesto_total` (opcional): si lo pones, además avisa cuando la **cuenta completa**
+  se pasa de ese monto, aunque ninguna categoría individual se haya pasado.
+- Una categoría con `None` como presupuesto queda **sin límite** (solo se registra, nunca avisa).
+- **Aviso al tiro:** apenas un gasto hace que se pasen del presupuesto (de la categoría o
+  del total de la cuenta), llega un mensaje de advertencia extra.
+- **Resumen a pedido:** escribe `resumen` (o `presupuesto`, `como vamos`, `balance`) y el
+  bot manda el estado completo, cuenta por cuenta, con semáforo:
+  🟢 vas bien &nbsp;·&nbsp; 🟡 sobre el 80% &nbsp;·&nbsp; 🔴 te pasaste &nbsp;·&nbsp; ⚪ sin límite
+- El dashboard también muestra barras de progreso con la misma info.
+
+⚠️ Los gastos registrados con el **formato libre** (sin pasar por los botones de "hola")
+usan categorías genéricas aparte (`CATEGORIAS_LIBRES`: Comida, Transporte, etc.) y **no
+cuentan para estos presupuestos** — quedan sin cuenta asignada. Para que sí cuenten, hay
+que usar los botones.
 
 ---
 
@@ -90,6 +140,7 @@ Prueba mandando `comida almuerzo 5.000` al número de WhatsApp — debería conf
 | `GET /webhook` | Verificación del webhook (la usa Meta una vez) |
 | `POST /webhook` | Recibe los mensajes entrantes de WhatsApp |
 | `GET /gastos` | Lista de gastos en memoria (lo usa el dashboard) |
+| `GET /resumen` | Estado de presupuestos por cuenta y categoría en JSON (lo usa el dashboard) |
 | `GET /health` | Estado del servicio |
 | `GET /export?key=TU_ADMIN_KEY` | Respaldo completo en JSON |
 | `GET /reset?key=TU_ADMIN_KEY` | Borra todo (úsalo con cuidado) |

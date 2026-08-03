@@ -113,6 +113,37 @@
 
   .chart-wrap { max-width: 420px; margin: 0 auto; }
 
+  .presupuesto-grupo { margin-bottom: 20px; }
+  .presupuesto-grupo:last-child { margin-bottom: 0; }
+  .presupuesto-titulo {
+    font-family: 'Courier Prime', monospace;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 10px;
+  }
+  .presupuesto-fila { margin-bottom: 12px; }
+  .presupuesto-fila:last-child { margin-bottom: 0; }
+  .presupuesto-labels {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; margin-bottom: 4px;
+  }
+  .presupuesto-labels .nombre { font-weight: 600; }
+  .presupuesto-labels .montos { font-family: 'Courier Prime', monospace; font-size: 12px; color: var(--ink-soft); }
+  .presupuesto-track {
+    height: 8px;
+    background: var(--paper-dark);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .presupuesto-bar { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+  .presupuesto-bar.ok { background: #6b8068; }
+  .presupuesto-bar.alerta { background: var(--brass); }
+  .presupuesto-bar.pasado { background: var(--stamp-red); }
+
+
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   th {
     text-align: left;
@@ -177,6 +208,11 @@
     </section>
 
     <section>
+      <h2>Presupuestos del mes</h2>
+      <div id="presupuestosWrap"><div class="loading">Cargando presupuestos…</div></div>
+    </section>
+
+    <section>
       <h2>Últimos movimientos</h2>
       <div id="tableWrap"><div class="loading">Cargando movimientos…</div></div>
     </section>
@@ -189,15 +225,7 @@
   const API_BASE = 'https://tu-backend.onrender.com';
   const POLL_MS = 15000; // cada cuánto refresca (no hay realtime sin base de datos, así que se hace polling)
 
-  const CATEGORY_COLORS = {
-    Comida: '#a9803f',
-    Transporte: '#566159',
-    Salud: '#a3403f',
-    Hogar: '#7a8471',
-    Entretenimiento: '#8a6d3b',
-    Mascotas: '#5b7065',
-    Otros: '#8a8272',
-  };
+  const PALETA = ['#a9803f', '#566159', '#a3403f', '#7a8471', '#8a6d3b', '#5b7065', '#8a8272', '#6b5b8a', '#3f6a8a'];
 
   let allGastos = [];
   let activePerson = 'Todos';
@@ -221,6 +249,46 @@
     } catch (err) {
       document.getElementById('tableWrap').innerHTML =
         '<div class="empty">No se pudo conectar al backend. Revisa API_BASE en este archivo (y que el servidor esté despierto).</div>';
+      console.error(err);
+    }
+  }
+
+  function barraPresupuesto(item) {
+    const tienePresupuesto = item.presupuesto != null && item.presupuesto > 0;
+    const pct = tienePresupuesto ? Math.min((item.gastado / item.presupuesto) * 100, 100) : 0;
+    const clase = !tienePresupuesto ? 'ok' : (item.gastado > item.presupuesto ? 'pasado' : (item.gastado / item.presupuesto >= 0.8 ? 'alerta' : 'ok'));
+    const exceso = tienePresupuesto && item.gastado > item.presupuesto ? ` <span style="color:var(--stamp-red)">(+${fmt(item.gastado - item.presupuesto)})</span>` : '';
+    const montos = tienePresupuesto ? `${fmt(item.gastado)} / ${fmt(item.presupuesto)}${exceso}` : fmt(item.gastado);
+    return `
+      <div class="presupuesto-fila">
+        <div class="presupuesto-labels">
+          <span class="nombre">${item.nombre}</span>
+          <span class="montos">${montos}</span>
+        </div>
+        <div class="presupuesto-track"><div class="presupuesto-bar ${clase}" style="width:${tienePresupuesto ? pct : 100}%"></div></div>
+      </div>
+    `;
+  }
+
+  async function loadResumen() {
+    const wrap = document.getElementById('presupuestosWrap');
+    try {
+      const res = await fetch(`${API_BASE}/resumen`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.cuentas || data.cuentas.length === 0) {
+        wrap.innerHTML = '<div class="empty">No hay cuentas configuradas en el backend.</div>';
+        return;
+      }
+      wrap.innerHTML = data.cuentas.map(cuenta => `
+        <div class="presupuesto-grupo">
+          <div class="presupuesto-titulo">${cuenta.nombre}</div>
+          ${barraPresupuesto({ nombre: 'Total', gastado: cuenta.gastado, presupuesto: cuenta.presupuesto })}
+          ${cuenta.categorias.map(barraPresupuesto).join('')}
+        </div>
+      `).join('');
+    } catch (err) {
+      wrap.innerHTML = '<div class="empty">No se pudo cargar el resumen de presupuestos.</div>';
       console.error(err);
     }
   }
@@ -249,10 +317,11 @@
       });
     });
 
-    // Gráfico por categoría
+    // Gráfico por cuenta + categoría (evita mezclar categorías con el mismo nombre en cuentas distintas)
     const porCategoria = {};
     filteredMonth.forEach(g => {
-      porCategoria[g.categoria] = (porCategoria[g.categoria] || 0) + Number(g.monto);
+      const etiqueta = g.cuenta ? `${g.cuenta} · ${g.categoria}` : g.categoria;
+      porCategoria[etiqueta] = (porCategoria[etiqueta] || 0) + Number(g.monto);
     });
     const labels = Object.keys(porCategoria);
     const values = Object.values(porCategoria);
@@ -268,7 +337,7 @@
           labels,
           datasets: [{
             data: values,
-            backgroundColor: labels.map(l => CATEGORY_COLORS[l] || '#8a8272'),
+            backgroundColor: labels.map((_, i) => PALETA[i % PALETA.length]),
             borderColor: '#f1ead7',
             borderWidth: 2,
           }],
@@ -300,7 +369,7 @@
           ${rows.map(g => `
             <tr>
               <td>${new Date(g.created_at).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })}</td>
-              <td><span class="quien">${g.member_name}</span></td>
+              <td><span class="quien">${g.member_name}</span>${g.cuenta ? ` <span class="quien">${g.cuenta}</span>` : ''}</td>
               <td>${g.categoria}<div class="categoria">${g.descripcion || g.mensaje_original || ''}</div></td>
               <td class="monto">${fmt(g.monto)}</td>
             </tr>
@@ -311,7 +380,9 @@
   }
 
   loadGastos();
+  loadResumen();
   setInterval(loadGastos, POLL_MS); // sin base de datos no hay realtime, así que refrescamos cada X segundos
+  setInterval(loadResumen, POLL_MS);
 </script>
 </body>
 </html>
