@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Libreta de Ahorro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root {
+    --paper: #f1ead7;
+    --paper-dark: #e6dcc3;
+    --ink: #2b3a34;
+    --ink-soft: #566159;
+    --rule: #c9bfa0;
+    --brass: #a9803f;
+    --stamp-red: #a3403f;
+    --card-shadow: 0 2px 6px rgba(43,58,52,0.15), 0 8px 24px rgba(43,58,52,0.08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper-dark);
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(43,58,52,0.05) 28px);
+    color: var(--ink);
+    font-family: 'Source Serif 4', serif;
+    min-height: 100vh;
+    padding: 32px 16px 80px;
+  }
+  .page {
+    max-width: 780px;
+    margin: 0 auto;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    box-shadow: var(--card-shadow);
+    padding: 40px 36px 32px;
+    position: relative;
+  }
+  .page::before {
+    content: '';
+    position: absolute;
+    left: 64px; top: 0; bottom: 0;
+    width: 1px;
+    background: rgba(163,64,63,0.25);
+  }
+  header { padding-left: 40px; margin-bottom: 28px; }
+  .eyebrow {
+    font-family: 'Special Elite', monospace;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  h1 {
+    font-family: 'Special Elite', monospace;
+    font-size: 28px;
+    margin: 6px 0 2px;
+    color: var(--ink);
+  }
+  .subtitle { font-size: 14px; color: var(--ink-soft); font-style: italic; }
+
+  .stamp-row {
+    display: flex;
+    gap: 24px;
+    align-items: center;
+    padding-left: 40px;
+    margin: 28px 0 32px;
+    flex-wrap: wrap;
+  }
+  .stamp {
+    width: 128px; height: 128px;
+    border: 3px solid var(--stamp-red);
+    border-radius: 50%;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    transform: rotate(-8deg);
+    color: var(--stamp-red);
+    font-family: 'Special Elite', monospace;
+    text-align: center;
+    flex-shrink: 0;
+    opacity: 0.9;
+  }
+  .stamp .label { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 4px; }
+  .stamp .amount { font-size: 17px; line-height: 1.15; padding: 0 8px; }
+  .stamp .month { font-size: 9px; margin-top: 4px; letter-spacing: 1px; }
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    font-family: 'Courier Prime', monospace;
+    font-size: 12px;
+    border: 1px solid var(--ink-soft);
+    background: transparent;
+    color: var(--ink-soft);
+    padding: 6px 12px;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .chip.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  section { padding-left: 40px; margin-bottom: 36px; }
+  h2 {
+    font-family: 'Special Elite', monospace;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--ink-soft);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+  }
+
+  .chart-wrap { max-width: 420px; margin: 0 auto; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    text-align: left;
+    font-family: 'Courier Prime', monospace;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--ink-soft);
+  }
+  td { padding: 9px 8px; border-bottom: 1px dashed var(--rule); vertical-align: top; }
+  td.monto { font-family: 'Courier Prime', monospace; text-align: right; white-space: nowrap; }
+  td.categoria { color: var(--ink-soft); font-size: 12px; }
+  .quien {
+    display: inline-block;
+    font-family: 'Courier Prime', monospace;
+    font-size: 11px;
+    background: var(--paper-dark);
+    border: 1px solid var(--rule);
+    padding: 2px 6px;
+    border-radius: 2px;
+  }
+
+  .empty {
+    padding-left: 40px;
+    font-style: italic;
+    color: var(--ink-soft);
+    font-size: 14px;
+  }
+  .loading { padding-left: 40px; font-family: 'Courier Prime', monospace; font-size: 13px; color: var(--ink-soft); }
+
+  footer { padding-left: 40px; font-family: 'Courier Prime', monospace; font-size: 11px; color: var(--ink-soft); }
+
+  @media (max-width: 560px) {
+    .page { padding: 28px 20px 24px; }
+    .page::before { left: 32px; }
+    header, .stamp-row, section, footer { padding-left: 16px; }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="eyebrow">Registro conjunto &middot; vía WhatsApp</div>
+      <h1>Libreta de Ahorro</h1>
+      <div class="subtitle">cada gasto, tal como llegó al chat</div>
+    </header>
+
+    <div class="stamp-row">
+      <div class="stamp">
+        <div class="label">Gastado</div>
+        <div class="amount" id="stampTotal">$0</div>
+        <div class="month" id="stampMonth">—</div>
+      </div>
+      <div class="filters" id="personFilters"></div>
+    </div>
+
+    <section>
+      <h2>Por categoría este mes</h2>
+      <div class="chart-wrap"><canvas id="chartCategorias"></canvas></div>
+    </section>
+
+    <section>
+      <h2>Últimos movimientos</h2>
+      <div id="tableWrap"><div class="loading">Cargando movimientos…</div></div>
+    </section>
+
+    <footer>Se actualiza cada 15 segundos &middot; los montos se registran automáticamente al escribirle al bot de WhatsApp</footer>
+  </div>
+
+<script>
+  // ⚠️ Reemplaza esto por la URL donde desplegaste tu backend (Render, Railway, etc.)
+  const API_BASE = 'https://tu-backend.onrender.com';
+  const POLL_MS = 15000; // cada cuánto refresca (no hay realtime sin base de datos, así que se hace polling)
+
+  const CATEGORY_COLORS = {
+    Comida: '#a9803f',
+    Transporte: '#566159',
+    Salud: '#a3403f',
+    Hogar: '#7a8471',
+    Entretenimiento: '#8a6d3b',
+    Mascotas: '#5b7065',
+    Otros: '#8a8272',
+  };
+
+  let allGastos = [];
+  let activePerson = 'Todos';
+  let chart;
+
+  function fmt(n) {
+    return '$' + Math.round(n).toLocaleString('es-CL');
+  }
+
+  function startOfMonth() {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+  }
+
+  async function loadGastos() {
+    try {
+      const res = await fetch(`${API_BASE}/gastos?limit=200`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      allGastos = await res.json();
+      render();
+    } catch (err) {
+      document.getElementById('tableWrap').innerHTML =
+        '<div class="empty">No se pudo conectar al backend. Revisa API_BASE en este archivo (y que el servidor esté despierto).</div>';
+      console.error(err);
+    }
+  }
+
+  function render() {
+    const monthStart = startOfMonth();
+    const thisMonth = allGastos.filter(g => g.created_at >= monthStart);
+    const filteredMonth = activePerson === 'Todos' ? thisMonth : thisMonth.filter(g => g.member_name === activePerson);
+
+    // Stamp total
+    const total = filteredMonth.reduce((s, g) => s + Number(g.monto), 0);
+    document.getElementById('stampTotal').textContent = fmt(total);
+    document.getElementById('stampMonth').textContent =
+      new Date().toLocaleDateString('es-CL', { month: 'long', year: 'numeric' }).toUpperCase();
+
+    // Filtros de persona
+    const personas = ['Todos', ...new Set(allGastos.map(g => g.member_name))];
+    const filtersEl = document.getElementById('personFilters');
+    filtersEl.innerHTML = personas.map(p =>
+      `<button class="chip ${p === activePerson ? 'active' : ''}" data-person="${p}">${p}</button>`
+    ).join('');
+    filtersEl.querySelectorAll('.chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        activePerson = btn.dataset.person;
+        render();
+      });
+    });
+
+    // Gráfico por categoría
+    const porCategoria = {};
+    filteredMonth.forEach(g => {
+      porCategoria[g.categoria] = (porCategoria[g.categoria] || 0) + Number(g.monto);
+    });
+    const labels = Object.keys(porCategoria);
+    const values = Object.values(porCategoria);
+
+    const ctx = document.getElementById('chartCategorias');
+    if (chart) chart.destroy();
+    if (labels.length === 0) {
+      ctx.getContext('2d').clearRect(0, 0, ctx.width, ctx.height);
+    } else {
+      chart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels,
+          datasets: [{
+            data: values,
+            backgroundColor: labels.map(l => CATEGORY_COLORS[l] || '#8a8272'),
+            borderColor: '#f1ead7',
+            borderWidth: 2,
+          }],
+        },
+        options: {
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: { font: { family: 'Courier Prime', size: 11 }, color: '#2b3a34', padding: 14 },
+            },
+          },
+        },
+      });
+    }
+
+    // Tabla de movimientos
+    const rows = (activePerson === 'Todos' ? allGastos : allGastos.filter(g => g.member_name === activePerson)).slice(0, 40);
+    const tableWrap = document.getElementById('tableWrap');
+    if (rows.length === 0) {
+      tableWrap.innerHTML = '<div class="empty">Todavía no hay gastos registrados. Manda un mensaje al bot para empezar.</div>';
+      return;
+    }
+    tableWrap.innerHTML = `
+      <table>
+        <thead>
+          <tr><th>Fecha</th><th>Quién</th><th>Categoría / detalle</th><th>Monto</th></tr>
+        </thead>
+        <tbody>
+          ${rows.map(g => `
+            <tr>
+              <td>${new Date(g.created_at).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })}</td>
+              <td><span class="quien">${g.member_name}</span></td>
+              <td>${g.categoria}<div class="categoria">${g.descripcion || g.mensaje_original || ''}</div></td>
+              <td class="monto">${fmt(g.monto)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  loadGastos();
+  setInterval(loadGastos, POLL_MS); // sin base de datos no hay realtime, así que refrescamos cada X segundos
+</script>
+</body>
+</html>
