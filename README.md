@@ -50,6 +50,29 @@ Esta opción no pregunta "cuenta" (Casa/Lindo/Linda) — queda sin asignar.
 
 Categorías, cuentas y presupuestos editables en `main.py` (`CUENTAS_CONFIG`) — ver detalle abajo.
 
+## Eliminar o modificar un gasto
+
+Escribe **`eliminar`** (o `borrar`) o **`modificar`** (o `editar`, `corregir`) y
+el bot te manda los últimos 10 gastos, como lista tocable **y** numerada en el
+mismo mensaje — puedes tocar la opción o simplemente responder con el número:
+
+```
+¿Cuál quieres eliminar? Tócalo de la lista, o mándame el número:
+
+1. 💙 Lindo · ☕ Cafecitos $3.000 (starbucks)
+2. 💛 Linda · 💅 Belleza $20.000 (corte)
+3. 🏠 Casa · 🛒 Supermercado $30.000 (lider)
+```
+
+- **Eliminar**: lo saca de la lista, de la planilla (si Sheets está conectado)
+  y recalcula el resumen del mes — todo al tiro.
+- **Modificar**: por ahora deja cambiar el **monto** (y de paso la descripción,
+  si escribes algo más junto al número) — es el caso más común ("me equivoqué
+  en el monto"). Si quieren cambiar la cuenta o categoría, por ahora es más
+  simple eliminarlo y registrarlo de nuevo.
+- En cualquier momento de este flujo pueden escribir **`cancelar`** para salir
+  sin tocar nada.
+
 ## Cuentas, categorías y presupuestos
 
 Todo se configura directamente en `main.py`, en el diccionario `CUENTAS_CONFIG`:
@@ -98,6 +121,11 @@ que usar los botones.
 Cada gasto se guarda en la pestaña de **su mes** (ej: "Agosto 2026", "Septiembre
 2026") — se crea sola la primera vez que hay un gasto ese mes. Columnas, en
 este orden: `Fecha`, `Cuenta`, `Categoria`, `Monto`, `Descripcion`, `Quien`.
+
+**El mes nuevo arranca solo, sin que haya que resetear nada:** como los
+presupuestos y el `resumen` se calculan filtrando por mes actual, el 1° de
+cada mes todo vuelve a $0 automáticamente apenas se crea la pestaña nueva —
+no hay ningún paso manual que hacer.
 
 Dentro de cada pestaña, las filas quedan **agrupadas por Cuenta y luego por
 Categoria** (se reordena solo cada vez que se guarda un gasto nuevo), así es

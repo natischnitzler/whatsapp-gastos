@@ -220,6 +220,51 @@ async def guardar_en_sheet(gasto: dict):
         return
     await asyncio.to_thread(_guardar_en_sheet_sync, gasto)
 
+def _fila_de_gasto_en_ws(ws, gasto: dict):
+    """Busca la fila (índice base-1) que corresponde a este gasto por su Fecha exacta."""
+    valores = ws.get_all_values()
+    for idx, fila in enumerate(valores[1:], start=2):  # la fila 1 son los headers
+        if fila and fila[0] == gasto["created_at"]:
+            return idx
+    return None
+
+def _eliminar_de_sheet_sync(gasto: dict):
+    try:
+        dt = datetime.fromisoformat(gasto["created_at"])
+        ws = _hoja_mes(dt)
+        idx = _fila_de_gasto_en_ws(ws, gasto)
+        if idx:
+            ws.delete_rows(idx)
+        _actualizar_resumen_mes_sync(dt)
+    except Exception as e:
+        import traceback
+        print(f"Error eliminando de Google Sheets: {type(e).__name__}: {e!r}")
+        traceback.print_exc()
+
+async def eliminar_gasto_en_sheet(gasto: dict):
+    if not sheets_configurado():
+        return
+    await asyncio.to_thread(_eliminar_de_sheet_sync, gasto)
+
+def _actualizar_gasto_en_sheet_sync(gasto: dict):
+    try:
+        dt = datetime.fromisoformat(gasto["created_at"])
+        ws = _hoja_mes(dt)
+        idx = _fila_de_gasto_en_ws(ws, gasto)
+        if idx:
+            ws.update_cell(idx, 4, gasto["monto"])  # columna D = Monto
+            ws.update_cell(idx, 5, gasto.get("descripcion") or "")  # columna E = Descripcion
+        _actualizar_resumen_mes_sync(dt)
+    except Exception as e:
+        import traceback
+        print(f"Error actualizando en Google Sheets: {type(e).__name__}: {e!r}")
+        traceback.print_exc()
+
+async def actualizar_gasto_en_sheet(gasto: dict):
+    if not sheets_configurado():
+        return
+    await asyncio.to_thread(_actualizar_gasto_en_sheet_sync, gasto)
+
 async def sincronizar_todo():
     """Recarga gastos y presupuestos desde la planilla (útil si editaron algo a mano en Sheets)."""
     if not sheets_configurado():
@@ -713,6 +758,10 @@ RESUMEN_PALABRAS = {"resumen", "presupuesto", "presupuestos", "como vamos", "có
 
 SYNC_PALABRAS = {"sincronizar", "actualizar", "recargar"}
 
+ELIMINAR_PALABRAS = {"eliminar", "borrar", "borra", "elimina"}
+MODIFICAR_PALABRAS = {"modificar", "editar", "corregir", "modifica", "edita"}
+CANCELAR_PALABRAS = {"cancelar", "cancela"}
+
 def _nombre_de(numero: str, value: dict) -> str:
     profile_name = None
     try:
@@ -750,6 +799,94 @@ def _confirmacion(gasto: dict) -> str:
     if gasto.get("descripcion"):
         texto += f" ({gasto['descripcion']})"
     return texto
+
+def _fecha_corta(iso: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso)
+        return f"{dt.day:02d} {MESES_ES.get(dt.month, '')[:3]}"
+    except (ValueError, TypeError):
+        return ""
+
+def _buscar_gasto_por_id(gasto_id):
+    for g in gastos:
+        if g["id"] == gasto_id:
+            return g
+    return None
+
+def _resumen_gasto_corto(gasto: dict) -> str:
+    partes = []
+    if gasto.get("cuenta"):
+        partes.append(f"{icono_cuenta(gasto['cuenta'])} {gasto['cuenta']}")
+    partes.append(f"{icono_categoria(gasto['categoria'])} {gasto['categoria']}")
+    texto = f"{' · '.join(partes)} {fmt_monto(gasto['monto'])}"
+    if gasto.get("descripcion"):
+        texto += f" ({gasto['descripcion']})"
+    return texto
+
+async def enviar_lista_gastos(to: str, accion: str):
+    """accion = 'eliminar' o 'modificar'. Muestra los últimos 10 gastos, tocables
+    O elegibles escribiendo el número — lo que sea más cómodo."""
+    recientes = gastos[:10]
+    if not recientes:
+        sesiones[to] = {}
+        await enviar_mensaje(to, "Todavía no hay ningún gasto registrado 🤷")
+        return
+
+    prefijo = "del" if accion == "eliminar" else "mod"
+    filas = []
+    lineas_numeradas = []
+    for i, g in enumerate(recientes, start=1):
+        icat = icono_categoria(g["categoria"])
+        cuenta_txt = f"{g['cuenta']} · " if g.get("cuenta") else ""
+        titulo = f"{icat} {g['categoria']} {fmt_monto(g['monto'])}"
+        descripcion_fila = f"{cuenta_txt}{_fecha_corta(g['created_at'])}"
+        if g.get("descripcion"):
+            descripcion_fila += f" · {g['descripcion']}"
+        filas.append({"id": f"{prefijo}__{g['id']}", "title": titulo[:24], "description": descripcion_fila[:72]})
+        lineas_numeradas.append(f"{i}. {_resumen_gasto_corto(g)}")
+
+    sesiones[to] = {"accion": accion, "candidatos": [g["id"] for g in recientes]}
+    verbo = "eliminar" if accion == "eliminar" else "modificar"
+    intro = f"¿Cuál quieres {verbo}? Tócalo de la lista, o mándame el número:\n\n" + "\n".join(lineas_numeradas)
+    await enviar_lista(to, intro, "Elegir gasto", filas)
+
+async def procesar_eliminacion(to: str, gasto_id: int):
+    gasto = _buscar_gasto_por_id(gasto_id)
+    sesiones[to] = {}
+    if not gasto:
+        await enviar_mensaje(to, "Mmm, ese gasto ya no está — puede que alguien más lo haya borrado antes 🤷")
+        return
+    gastos.remove(gasto)
+    await eliminar_gasto_en_sheet(gasto)
+    await enviar_mensaje(to, f"🗑️ Listo, eliminé {_resumen_gasto_corto(gasto)}.")
+
+async def procesar_seleccion_modificar(to: str, gasto_id: int):
+    gasto = _buscar_gasto_por_id(gasto_id)
+    if not gasto:
+        sesiones[to] = {}
+        await enviar_mensaje(to, "Mmm, ese gasto ya no está — puede que alguien más lo haya borrado antes 🤷")
+        return
+    sesiones[to] = {"accion": "modificar_monto", "gasto_id": gasto_id}
+    await enviar_mensaje(
+        to,
+        f"Dale, {_resumen_gasto_corto(gasto)} — mándame el monto correcto (puedes agregar un "
+        f"comentario nuevo también), o escribe *cancelar*.",
+    )
+
+async def procesar_modificacion_monto(to: str, gasto_id: int, monto_nuevo: float, descripcion_nueva):
+    gasto = _buscar_gasto_por_id(gasto_id)
+    sesiones[to] = {}
+    if not gasto:
+        await enviar_mensaje(to, "Mmm, ese gasto ya no está — puede que alguien más lo haya borrado antes 🤷")
+        return
+    gasto["monto"] = monto_nuevo
+    if descripcion_nueva:
+        gasto["descripcion"] = descripcion_nueva
+    await actualizar_gasto_en_sheet(gasto)
+    await enviar_mensaje(to, f"✏️ ¡Listo! Quedó en {_resumen_gasto_corto(gasto)}")
+    estado = _estado_texto(gasto)
+    if estado:
+        await enviar_mensaje(to, estado)
 
 # ── Cálculo de presupuestos ────────────────────────────────────────────────────
 def _mismo_mes(iso_str: str, ahora: datetime) -> bool:
@@ -957,6 +1094,24 @@ async def recibir_mensaje(request: Request):
             )
             return {"status": "ok"}
 
+        if reply_id and reply_id.startswith("del__"):
+            try:
+                gasto_id = int(reply_id[len("del__"):])
+            except ValueError:
+                gasto_id = None
+            if gasto_id is not None:
+                await procesar_eliminacion(numero, gasto_id)
+            return {"status": "ok"}
+
+        if reply_id and reply_id.startswith("mod__"):
+            try:
+                gasto_id = int(reply_id[len("mod__"):])
+            except ValueError:
+                gasto_id = None
+            if gasto_id is not None:
+                await procesar_seleccion_modificar(numero, gasto_id)
+            return {"status": "ok"}
+
         await enviar_mensaje(numero, "Uy, no entendí esa opción 😅 escríbeme *hola* y empezamos de nuevo.")
         return {"status": "ok"}
 
@@ -986,6 +1141,46 @@ async def recibir_mensaje(request: Request):
             return {"status": "ok"}
         await sincronizar_todo()
         await enviar_mensaje(numero, f"🔄 Listo, sincronicé todo con la planilla — llevamos {len(gastos)} gastos anotados.")
+        return {"status": "ok"}
+
+    # ── Pedir eliminar o modificar un gasto → manda la lista de los últimos 10 ──
+    if texto_lower in ELIMINAR_PALABRAS:
+        await enviar_lista_gastos(numero, "eliminar")
+        return {"status": "ok"}
+
+    if texto_lower in MODIFICAR_PALABRAS:
+        await enviar_lista_gastos(numero, "modificar")
+        return {"status": "ok"}
+
+    # ── Cancelar un eliminar/modificar en curso ──
+    if texto_lower in CANCELAR_PALABRAS and sesion.get("accion"):
+        sesiones[numero] = {}
+        await enviar_mensaje(numero, "Ya, quedó como estaba 🙂 escribe *hola* si quieres registrar algo.")
+        return {"status": "ok"}
+
+    # ── Eligieron un gasto de la lista escribiendo el número en vez de tocarlo ──
+    if sesion.get("accion") in ("eliminar", "modificar") and texto.strip().isdigit():
+        candidatos = sesion.get("candidatos", [])
+        idx = int(texto.strip())
+        if 1 <= idx <= len(candidatos):
+            gasto_id = candidatos[idx - 1]
+            if sesion["accion"] == "eliminar":
+                await procesar_eliminacion(numero, gasto_id)
+            else:
+                await procesar_seleccion_modificar(numero, gasto_id)
+        else:
+            await enviar_mensaje(numero, f"Ese número no está en la lista 😅 elige uno del 1 al {len(candidatos)}, o escribe *cancelar*.")
+        return {"status": "ok"}
+
+    # ── Ya eligieron qué gasto modificar → este mensaje trae el monto nuevo ──
+    if sesion.get("accion") == "modificar_monto":
+        resultado_monto = extraer_monto(texto)
+        if not resultado_monto:
+            await enviar_mensaje(numero, "No pesqué el monto ahí 🤔 mándame el número nuevo, o escribe *cancelar*.")
+            return {"status": "ok"}
+        monto_nuevo, texto_monto = resultado_monto
+        descripcion_nueva = re.sub(r"\s+", " ", texto.replace(texto_monto, "")).strip() or None
+        await procesar_modificacion_monto(numero, sesion["gasto_id"], monto_nuevo, descripcion_nueva)
         return {"status": "ok"}
 
     # ── Código de presupuesto solo, sin monto (ej: "LN01") → arma la sesión y pide el monto ──
