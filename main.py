@@ -90,6 +90,67 @@ def _hoja_mes(dt: datetime):
         _hoja_cache[cache_key] = ws
     return _hoja_cache[cache_key]
 
+def _hoja_resumen_mes(dt: datetime):
+    """Pestaña 'Resumen <Mes> <Año>' — totales por Cuenta y Categoria de ese mes."""
+    titulo = f"Resumen {_nombre_pestana_mes(dt)}"
+    cache_key = f"ws_resumen::{titulo}"
+    if cache_key not in _hoja_cache:
+        import gspread
+        sh = _spreadsheet()
+        try:
+            ws = sh.worksheet(titulo)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=titulo, rows=100, cols=3)
+        _hoja_cache[cache_key] = ws
+    return _hoja_cache[cache_key]
+
+def _resumen_mes_filas(dt: datetime) -> list:
+    """Arma [Cuenta, Categoria, Suma] agrupado, con un TOTAL por cuenta y un TOTAL GENERAL,
+    usando lo que hay en memoria (ya incluye el gasto recién guardado)."""
+    filas = []
+    total_general = 0
+    for cuenta in CUENTAS_CONFIG:
+        por_categoria = {}
+        for g in gastos:
+            if g.get("cuenta") != cuenta:
+                continue
+            try:
+                gdt = datetime.fromisoformat(g["created_at"])
+            except ValueError:
+                continue
+            if gdt.year != dt.year or gdt.month != dt.month:
+                continue
+            cat = g.get("categoria") or "(sin categoría)"
+            por_categoria[cat] = por_categoria.get(cat, 0) + g["monto"]
+        if not por_categoria:
+            continue
+        subtotal = sum(por_categoria.values())
+        for cat, suma in por_categoria.items():
+            filas.append([cuenta, cat, suma])
+        filas.append([cuenta, "TOTAL", subtotal])
+        total_general += subtotal
+    if filas:
+        filas.append(["TOTAL GENERAL", "", total_general])
+    return filas
+
+def _actualizar_resumen_mes_sync(dt: datetime):
+    ws = _hoja_resumen_mes(dt)
+    ws.clear()
+    ws.append_row(["Cuenta", "Categoria", "Suma"])
+    filas = _resumen_mes_filas(dt)
+    if filas:
+        ws.append_rows(filas)
+
+def _actualizar_resumenes_todos_los_meses():
+    """Reconstruye la pestaña de resumen de cada mes que tenga gastos en memoria."""
+    meses = {(g["created_at"][:7]) for g in gastos if g.get("created_at")}  # 'YYYY-MM'
+    for ym in meses:
+        try:
+            anio, mes = int(ym[:4]), int(ym[5:7])
+            _actualizar_resumen_mes_sync(datetime(anio, mes, 1, tzinfo=timezone.utc))
+        except Exception as e:
+            print(f"Error actualizando resumen de {ym}: {type(e).__name__}: {e!r}")
+
 def _cargar_desde_sheet():
     """Al iniciar el servidor, restaura el historial de TODAS las pestañas de mes."""
     global gastos, _next_id
@@ -128,6 +189,13 @@ def _cargar_desde_sheet():
         print(f"Error cargando desde Google Sheets: {type(e).__name__}: {e!r}")
         traceback.print_exc()
 
+    try:
+        _actualizar_resumenes_todos_los_meses()
+    except Exception as e:
+        import traceback
+        print(f"Error actualizando resúmenes mensuales: {type(e).__name__}: {e!r}")
+        traceback.print_exc()
+
 def _guardar_en_sheet_sync(gasto: dict):
     try:
         dt = datetime.fromisoformat(gasto["created_at"])
@@ -140,6 +208,7 @@ def _guardar_en_sheet_sync(gasto: dict):
         total_filas = len(ws.get_all_values())
         if total_filas > 2:
             ws.sort((2, "asc"), (3, "asc"), (1, "asc"), range=f"A2:F{total_filas}")
+        _actualizar_resumen_mes_sync(dt)
     except Exception as e:
         import traceback
         print(f"Error guardando en Google Sheets: {type(e).__name__}: {e!r}")

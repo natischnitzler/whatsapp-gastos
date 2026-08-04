@@ -101,7 +101,26 @@ este orden: `Fecha`, `Cuenta`, `Categoria`, `Monto`, `Descripcion`, `Quien`.
 
 Dentro de cada pestaña, las filas quedan **agrupadas por Cuenta y luego por
 Categoria** (se reordena solo cada vez que se guarda un gasto nuevo), así es
-fácil mirar de un vistazo cuánto se fue en cada cosa.
+fácil mirar de un vistazo cuánto se fue en cada cosa. Con un solo gasto no se
+nota — el orden se ve a partir del segundo.
+
+Además, el bot crea sola una pestaña **"Resumen \<Mes\> \<Año\>"** (ej: "Resumen
+Agosto 2026") con la **suma total por Cuenta y por Categoria** de ese mes —
+algo así:
+
+| Cuenta | Categoria | Suma |
+|---|---|---|
+| Casa | Farmacia | 8.000 |
+| Casa | Supermercado | 45.000 |
+| Casa | **TOTAL** | **53.000** |
+| Linda | Belleza | 25.000 |
+| Linda | **TOTAL** | **25.000** |
+| **TOTAL GENERAL** | | **78.000** |
+
+Esta pestaña se reconstruye sola cada vez que se guarda un gasto nuevo, y
+también al sincronizar (`sincronizar`, cada 5 min, o al arrancar el servidor)
+— así que si editas algo a mano en la pestaña del mes, el resumen se pone al
+día apenas se resincroniza.
 
 ⚠️ Si venías de una versión anterior del bot con una sola pestaña de gastos con
 más columnas (Telefono, MensajeOriginal, WaMessageId), esa pestaña queda tal
