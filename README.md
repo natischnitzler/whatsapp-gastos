@@ -67,6 +67,25 @@ Esta opción no pregunta "cuenta" (Casa/Lindo/Linda) — queda sin asignar.
 
 Categorías, cuentas y presupuestos editables en `main.py` (`CUENTAS_CONFIG`) — ver detalle abajo.
 
+## Sumar plata a un presupuesto (sin registrar un gasto)
+
+Escribe **`sumar`** (o `agregar`, `añadir`, `aumentar`) seguido de a qué —
+funciona igual que registrar un gasto (cuenta + categoría, código, o solo
+categoría si no es ambigua), pero en vez de gastar, **sube el tope** de esa
+categoría o cuenta:
+
+```
+sumar Linda belleza 3.000
+sumar a Linda belleza 3.000      (con o sin el "a", da lo mismo)
+sumar LN03 3.000                 (con código)
+sumar Linda 50.000                (sin categoría → sube el tope general de la cuenta)
+```
+
+El bot confirma con el nuevo total: *"➕ ¡Sumé $3.000! 💅 Belleza (💛 Linda) ahora
+tiene $33.000 de presupuesto"*. El cambio queda guardado en la pestaña
+"Presupuestos" del Excel también (si Sheets está conectado), así no se pierde
+al reiniciar el servidor.
+
 ## Eliminar o modificar un gasto
 
 Escribe **`eliminar`** (o `borrar`) o **`modificar`** (o `editar`, `corregir`) y

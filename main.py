@@ -265,6 +265,32 @@ async def actualizar_gasto_en_sheet(gasto: dict):
         return
     await asyncio.to_thread(_actualizar_gasto_en_sheet_sync, gasto)
 
+def _actualizar_presupuesto_en_sheet_sync(cuenta: str, categoria, nuevo_valor: float):
+    """categoria=None → actualiza el tope general de la cuenta (fila con Categoria en blanco)."""
+    try:
+        ws = _hoja_presupuestos()
+        filas = ws.get_all_values()
+        for idx, fila in enumerate(filas[1:], start=2):
+            fc = fila[0].strip() if len(fila) > 0 else ""
+            fcat = fila[1].strip() if len(fila) > 1 else ""
+            if fc == cuenta and fcat == (categoria or ""):
+                ws.update_cell(idx, 3, nuevo_valor)  # columna C = Presupuesto
+                return
+        # No debería pasar (la fila siempre debería existir), pero por si acaso la agrega
+        codigo = ""
+        if categoria:
+            codigo = next((c for c, (cu, ca) in CODIGOS.items() if cu == cuenta and ca == categoria), "")
+        ws.append_row([cuenta, categoria or "", nuevo_valor, codigo])
+    except Exception as e:
+        import traceback
+        print(f"Error actualizando presupuesto en Google Sheets: {type(e).__name__}: {e!r}")
+        traceback.print_exc()
+
+async def actualizar_presupuesto_en_sheet(cuenta: str, categoria, nuevo_valor: float):
+    if not sheets_configurado():
+        return
+    await asyncio.to_thread(_actualizar_presupuesto_en_sheet_sync, cuenta, categoria, nuevo_valor)
+
 async def sincronizar_todo():
     """Recarga gastos y presupuestos desde la planilla (útil si editaron algo a mano en Sheets)."""
     if not sheets_configurado():
@@ -923,6 +949,68 @@ async def procesar_modificacion_monto(to: str, gasto_id: int, monto_nuevo: float
     if estado:
         await enviar_mensaje(to, estado)
 
+SUMAR_PALABRAS_INICIO = {"sumar", "agregar", "anadir", "aumentar"}
+
+def _detectar_comando_sumar(texto: str):
+    """Si el mensaje empieza con 'sumar/agregar/añadir/aumentar [a] ...', devuelve el resto
+    del texto (lo que sigue). Si no empieza con ninguna de esas palabras, devuelve None."""
+    palabras = texto.strip().split(None, 1)
+    if not palabras or normalizar_texto(palabras[0]) not in SUMAR_PALABRAS_INICIO:
+        return None
+    resto = palabras[1] if len(palabras) > 1 else ""
+    resto_palabras = resto.split(None, 1)
+    if resto_palabras and normalizar_texto(resto_palabras[0]) == "a":  # "sumar A Linda..."
+        resto = resto_palabras[1] if len(resto_palabras) > 1 else ""
+    return resto.strip()
+
+async def procesar_comando_sumar(numero: str, resto: str):
+    if not resto:
+        await enviar_mensaje(numero, 'Cuéntame a qué le sumamos plata, ej: "sumar Linda belleza 3.000"')
+        return
+
+    directo = parse_directo(resto, numero)
+    if directo:
+        cuenta, categoria, monto = directo["cuenta"], directo["categoria"], directo["monto"]
+        config = CUENTAS_CONFIG[cuenta]
+        anterior = config["categorias"].get(categoria) or 0
+        nuevo = anterior + monto
+        config["categorias"][categoria] = nuevo
+        await actualizar_presupuesto_en_sheet(cuenta, categoria, nuevo)
+        await enviar_mensaje(
+            numero,
+            f"➕ ¡Sumé {fmt_monto(monto)}! {icono_categoria(categoria)} {categoria} ({icono_cuenta(cuenta)} {cuenta}) "
+            f"ahora tiene {fmt_monto(nuevo)} de presupuesto 💛",
+        )
+        return
+
+    # Sin categoría → intenta 'cuenta monto', para el tope general de la cuenta
+    texto_norm = normalizar_texto(resto)
+    cuenta_total = None
+    for cuenta in CUENTAS_CONFIG:
+        if re.search(rf"\b{re.escape(normalizar_texto(cuenta))}\b", texto_norm):
+            cuenta_total = cuenta
+            break
+    resultado_monto = extraer_monto(resto)
+
+    if cuenta_total and resultado_monto:
+        monto, _ = resultado_monto
+        config = CUENTAS_CONFIG[cuenta_total]
+        anterior = config.get("presupuesto_total") or 0
+        nuevo = anterior + monto
+        config["presupuesto_total"] = nuevo
+        await actualizar_presupuesto_en_sheet(cuenta_total, None, nuevo)
+        await enviar_mensaje(
+            numero,
+            f"➕ ¡Sumé {fmt_monto(monto)}! El presupuesto general de {icono_cuenta(cuenta_total)} {cuenta_total} "
+            f"ahora es {fmt_monto(nuevo)} 💛",
+        )
+        return
+
+    await enviar_mensaje(
+        numero,
+        'No pesqué a qué categoría o cuenta sumarle 🤔 Prueba así: "sumar Linda belleza 3.000"',
+    )
+
 # ── Cálculo de presupuestos ────────────────────────────────────────────────────
 def _mismo_mes(iso_str: str, ahora: datetime) -> bool:
     try:
@@ -1216,6 +1304,12 @@ async def recibir_mensaje(request: Request):
         monto_nuevo, texto_monto = resultado_monto
         descripcion_nueva = re.sub(r"\s+", " ", texto.replace(texto_monto, "")).strip() or None
         await procesar_modificacion_monto(numero, sesion["gasto_id"], monto_nuevo, descripcion_nueva)
+        return {"status": "ok"}
+
+    # ── "Sumar/agregar/añadir/aumentar" → sube un presupuesto, NO registra un gasto ──
+    resto_sumar = _detectar_comando_sumar(texto)
+    if resto_sumar is not None:
+        await procesar_comando_sumar(numero, resto_sumar)
         return {"status": "ok"}
 
     # ── Código de presupuesto solo, sin monto (ej: "LN01") → arma la sesión y pide el monto ──
