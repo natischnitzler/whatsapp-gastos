@@ -24,8 +24,7 @@ historial desde ahí** — el reinicio deja de ser un problema.
 5. Escribes el monto (puedes agregar una descripción, ej: `almuerzo 8.500`) → queda guardado,
    y te dice cuánto les queda en esa categoría (o el aviso de sobregiro si ya se pasaron)
 
-**Opción 2 — código directo (más rápido, ideal si ya se lo saben de memoria):**
-Cada categoría tiene un código corto (se genera solo, ej: `LN01` para la primera
+**Opción 2 — código directo (más rápido, ideal si ya se lo saben de memoria):**Cada categoría tiene un código corto (se genera solo, ej: `LN01` para la primera
 categoría de Linda). Pueden mandarlo solo o con el monto en el mismo mensaje:
 - `LN01` → el bot reconoce cuenta y categoría, y pregunta el monto
 - `LN01 5.000 spinning` → queda registrado directo, sin preguntar nada
@@ -38,6 +37,24 @@ tiro y no hace falta tocar nada:
 - `Lindo cafecitos 5.000 Starbucks`
 - `Casa supermercado 15.000 verduras`
 - `Starbucks 3.000, cafecitos de Lindo` (el orden no importa)
+
+**Ni siquiera hace falta decir la cuenta**, si la categoría no es ambigua:
+- `perros 12.000 vacuna` → reconoce Casa solo, porque "Perros" solo existe ahí
+
+Si la categoría **sí existe en más de una cuenta** (ej: "Belleza" está en Linda
+y en Lindo), el bot resuelve solo según **quién escribe**, usando
+`CUENTA_PREDETERMINADA_POR_TELEFONO` en `main.py`:
+```python
+CUENTA_PREDETERMINADA_POR_TELEFONO = {
+    "56985495930": "Linda",
+    "56945676306": "Lindo",
+}
+```
+Así, si Linda manda `belleza 20.000`, queda en su cuenta; si Lindo manda lo
+mismo, queda en la suya — sin tener que aclarar nada. Si el número de quien
+escribe no está en esa lista, el bot prefiere no adivinar (evita asignarlo mal)
+y no lo reconoce por ese camino — en ese caso hay que decir la cuenta explícita,
+usar el código, o los botones.
 
 **Opción 4 — texto libre genérico (si no se reconoce cuenta+categoría):**
 `<lo que quieras> <categoría> <monto>` — el parser busca el **último número**

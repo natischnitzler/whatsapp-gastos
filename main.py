@@ -352,6 +352,14 @@ def icono_cuenta(cuenta: str) -> str:
 def icono_categoria(categoria: str) -> str:
     return ICONOS_CATEGORIA.get(categoria, "🔹")
 
+# Si alguien escribe una categoría ambigua (que existe en más de una cuenta, ej:
+# "Belleza" en Linda y en Lindo) SIN decir la cuenta, se resuelve solo según quién
+# escribe. Números en formato normalizado (sin '+', sin espacios).
+CUENTA_PREDETERMINADA_POR_TELEFONO = {
+    "56985495930": "Linda",
+    "56945676306": "Lindo",
+}
+
 
 # Prefijo de código por cuenta (para que Linda y Lindo no choquen aunque empiecen igual).
 # Los códigos reales que use el bot terminan siendo los que estén en la pestaña
@@ -590,10 +598,23 @@ def parse_message(texto_original: str):
 
     return {"categoria": categoria, "monto": monto, "descripcion": descripcion or None}
 
-def parse_directo(texto_original: str):
+def _match_categoria_en_cuenta(cuenta: str, texto_norm: str, texto_original: str):
+    """Busca el nombre (o sinónimo) de cualquier categoría de esa cuenta en el texto."""
+    for cat in CUENTAS_CONFIG[cuenta]["categorias"]:
+        candidatos = [cat] + SINONIMOS_CATEGORIA.get(cat, [])
+        for candidato in candidatos:
+            cand_norm = normalizar_texto(candidato)
+            m = re.search(rf"\b{re.escape(cand_norm)}\b", texto_norm)
+            if m:
+                return cat, texto_original[m.start():m.end()]
+    return None, None
+
+def parse_directo(texto_original: str, numero: str = None):
     """Detecta 'cuenta categoría monto [comentario]' en cualquier orden dentro del texto,
     ej: 'Lindo cafecitos 5.000 Starbucks' o 'Starbucks 5.000, cafecitos de Lindo'.
-    También reconoce un código directo de la pestaña Presupuestos, ej: 'LN01 5.000 Starbucks'."""
+    También reconoce un código directo de la pestaña Presupuestos (ej: 'LN01 5.000 Starbucks'),
+    y si no dicen la cuenta pero la categoría es ambigua (ej: 'Belleza' existe en más de una
+    cuenta), la resuelve solo según quién escribe (CUENTA_PREDETERMINADA_POR_TELEFONO)."""
     texto_norm = normalizar_texto(texto_original)
 
     cuenta_encontrada = None
@@ -609,7 +630,7 @@ def parse_directo(texto_original: str):
             cuenta_match = categoria_match = token  # se descuenta una sola vez de la descripción
             break
 
-    # 2) Si no hay código, busca por nombre de cuenta + categoría/sinónimo (como antes)
+    # 2) Si no hay código, busca por nombre de cuenta explícito en el texto
     if not cuenta_encontrada:
         for cuenta in CUENTAS_CONFIG:
             cuenta_norm = normalizar_texto(cuenta)
@@ -618,22 +639,36 @@ def parse_directo(texto_original: str):
                 cuenta_encontrada = cuenta
                 cuenta_match = texto_original[m.start():m.end()]
                 break
-        if not cuenta_encontrada:
-            return None
 
-        for cat in CUENTAS_CONFIG[cuenta_encontrada]["categorias"]:
-            candidatos = [cat] + SINONIMOS_CATEGORIA.get(cat, [])
-            for candidato in candidatos:
-                cand_norm = normalizar_texto(candidato)
-                m = re.search(rf"\b{re.escape(cand_norm)}\b", texto_norm)
-                if m:
-                    categoria_encontrada = cat
-                    categoria_match = texto_original[m.start():m.end()]
-                    break
-            if categoria_encontrada:
-                break
-        if not categoria_encontrada:
-            return None
+        if cuenta_encontrada:
+            # Dijeron la cuenta explícita → busca la categoría SOLO dentro de esa cuenta
+            categoria_encontrada, categoria_match = _match_categoria_en_cuenta(
+                cuenta_encontrada, texto_norm, texto_original
+            )
+            if not categoria_encontrada:
+                return None
+        else:
+            # No dijeron ninguna cuenta → busca la categoría en TODAS las cuentas
+            coincidencias = []  # [(cuenta, categoria, texto_match), ...]
+            for cuenta in CUENTAS_CONFIG:
+                cat, match = _match_categoria_en_cuenta(cuenta, texto_norm, texto_original)
+                if cat:
+                    coincidencias.append((cuenta, cat, match))
+
+            if not coincidencias:
+                return None
+            elif len(coincidencias) == 1:
+                cuenta_encontrada, categoria_encontrada, categoria_match = coincidencias[0]
+            else:
+                # Categoría ambigua (ej: "Belleza" en Linda y en Lindo) → resuelve por quién escribe
+                cuentas_posibles = {c for c, _, _ in coincidencias}
+                dueño = CUENTA_PREDETERMINADA_POR_TELEFONO.get(numero) if numero else None
+                if dueño and dueño in cuentas_posibles:
+                    cuenta_encontrada, categoria_encontrada, categoria_match = next(
+                        c for c in coincidencias if c[0] == dueño
+                    )
+                else:
+                    return None  # ambiguo y no sabemos de quién es → mejor no adivinar
 
     resultado_monto = extraer_monto(texto_original)
     if not resultado_monto:
@@ -641,7 +676,7 @@ def parse_directo(texto_original: str):
     monto, texto_monto = resultado_monto
 
     descripcion = texto_original
-    patrones = [cuenta_match, texto_monto] if cuenta_match == categoria_match else [cuenta_match, categoria_match, texto_monto]
+    patrones = [p for p in {cuenta_match, categoria_match, texto_monto} if p]
     for patron in patrones:
         descripcion = re.sub(re.escape(patron), " ", descripcion, count=1, flags=re.IGNORECASE)
     descripcion = re.sub(r"[,\.]+", " ", descripcion)
@@ -1197,7 +1232,7 @@ async def recibir_mensaje(request: Request):
         return {"status": "ok"}
 
     # ── Atajo: detecta 'cuenta categoría monto' directo en el texto (ej: "Lindo cafecitos 5.000 Starbucks") ──
-    directo = parse_directo(texto)
+    directo = parse_directo(texto, numero)
     if directo:
         gasto = await _guardar_gasto(numero, nombre, directo["cuenta"], directo["categoria"],
                                       directo["monto"], directo["descripcion"], texto, wa_id)
