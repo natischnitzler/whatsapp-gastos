@@ -228,6 +228,14 @@
 
   const PALETA = ['#a9803f', '#566159', '#a3403f', '#7a8471', '#8a6d3b', '#5b7065', '#8a8272', '#6b5b8a', '#3f6a8a'];
 
+  const ICONOS_CUENTA = { Casa: '🏠', Linda: '💛', Lindo: '💙' };
+  const ICONOS_CATEGORIA = {
+    Perros: '🐶', Tali: '✨', Farmacia: '💊', Regalos: '🎁', Supermercado: '🛒', Spid: '⚡',
+    Deporte: '🏃', 'Salir a comer': '🍽️', Belleza: '💅', Cafecitos: '☕', Salidas: '🎉', Otros: '🔹',
+  };
+  const iconoCuenta = c => ICONOS_CUENTA[c] || '💰';
+  const iconoCategoria = c => ICONOS_CATEGORIA[c] || '🔹';
+
   let allGastos = [];
   let activePerson = 'Todos';
   let chart;
@@ -269,7 +277,7 @@
     return `
       <div class="presupuesto-fila">
         <div class="presupuesto-labels">
-          <span class="nombre">${item.nombre}</span>
+          <span class="nombre">${item.icono ? item.icono + ' ' : ''}${item.nombre}</span>
           <span class="montos">${montos}</span>
         </div>
         <div class="presupuesto-track"><div class="presupuesto-bar ${clase}" style="width:${tienePresupuesto ? pct : 100}%"></div></div>
@@ -289,9 +297,9 @@
       }
       wrap.innerHTML = data.cuentas.map(cuenta => `
         <div class="presupuesto-grupo">
-          <div class="presupuesto-titulo">${cuenta.nombre}</div>
+          <div class="presupuesto-titulo">${iconoCuenta(cuenta.nombre)} ${cuenta.nombre}</div>
           ${barraPresupuesto({ nombre: 'Total', gastado: cuenta.gastado, presupuesto: cuenta.presupuesto })}
-          ${cuenta.categorias.map(barraPresupuesto).join('')}
+          ${cuenta.categorias.map(c => barraPresupuesto({ ...c, icono: iconoCategoria(c.nombre) })).join('')}
         </div>
       `).join('');
     } catch (err) {
@@ -327,7 +335,7 @@
     // Gráfico por cuenta + categoría (evita mezclar categorías con el mismo nombre en cuentas distintas)
     const porCategoria = {};
     filteredMonth.forEach(g => {
-      const etiqueta = g.cuenta ? `${g.cuenta} · ${g.categoria}` : g.categoria;
+      const etiqueta = g.cuenta ? `${iconoCuenta(g.cuenta)} ${g.cuenta} · ${iconoCategoria(g.categoria)} ${g.categoria}` : `${iconoCategoria(g.categoria)} ${g.categoria}`;
       porCategoria[etiqueta] = (porCategoria[etiqueta] || 0) + Number(g.monto);
     });
     const labels = Object.keys(porCategoria);
@@ -376,8 +384,8 @@
           ${rows.map(g => `
             <tr>
               <td>${new Date(g.created_at).toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })}</td>
-              <td><span class="quien">${g.member_name}</span>${g.cuenta ? ` <span class="quien">${g.cuenta}</span>` : ''}</td>
-              <td>${g.categoria}<div class="categoria">${g.descripcion || g.mensaje_original || ''}</div></td>
+              <td><span class="quien">${g.member_name}</span>${g.cuenta ? ` <span class="quien">${iconoCuenta(g.cuenta)} ${g.cuenta}</span>` : ''}</td>
+              <td>${iconoCategoria(g.categoria)} ${g.categoria}<div class="categoria">${g.descripcion || g.mensaje_original || ''}</div></td>
               <td class="monto">${fmt(g.monto)}</td>
             </tr>
           `).join('')}

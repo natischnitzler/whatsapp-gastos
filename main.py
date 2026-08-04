@@ -211,6 +211,34 @@ CUENTAS_CONFIG = {
     },
 }
 
+# Íconos para que se vea más lindo en WhatsApp y en el dashboard. Editables acá.
+ICONOS_CUENTA = {
+    "Casa": "🏠",
+    "Linda": "💛",
+    "Lindo": "💙",
+}
+ICONOS_CATEGORIA = {
+    "Perros": "🐶",
+    "Tali": "✨",
+    "Farmacia": "💊",
+    "Regalos": "🎁",
+    "Supermercado": "🛒",
+    "Spid": "⚡",
+    "Deporte": "🏃",
+    "Salir a comer": "🍽️",
+    "Belleza": "💅",
+    "Cafecitos": "☕",
+    "Salidas": "🎉",
+    "Otros": "🔹",
+}
+
+def icono_cuenta(cuenta: str) -> str:
+    return ICONOS_CUENTA.get(cuenta, "💰")
+
+def icono_categoria(categoria: str) -> str:
+    return ICONOS_CATEGORIA.get(categoria, "🔹")
+
+
 # Prefijo de código por cuenta (para que Linda y Lindo no choquen aunque empiecen igual).
 # Los códigos reales que use el bot terminan siendo los que estén en la pestaña
 # "Presupuestos" del Excel — esto es solo el punto de partida.
@@ -601,13 +629,13 @@ async def enviar_bienvenida(to: str, nombre: str):
         f"¿En qué gastaste? Elige una cuenta, o escribe *resumen* para ver cómo van.\n\n"
         f"{recordatorio}"
     )
-    botones = [{"id": f"cuenta_{_slug(c)}", "title": f"Gastos {c}"} for c in CUENTAS_CONFIG]
+    botones = [{"id": f"cuenta_{_slug(c)}", "title": f"{icono_cuenta(c)} Gastos {c}"} for c in CUENTAS_CONFIG]
     await enviar_botones(to, texto, botones)
 
 async def enviar_categorias(to: str, cuenta: str):
     categorias = CUENTAS_CONFIG[cuenta]["categorias"]
-    filas = [{"id": f"cat__{_slug(cuenta)}__{_slug(cat)}", "title": cat} for cat in categorias]
-    await enviar_lista(to, f"Buenísimo, ¿en qué se fue la plata de {cuenta}?", "Elegir categoría", filas)
+    filas = [{"id": f"cat__{_slug(cuenta)}__{_slug(cat)}", "title": f"{icono_categoria(cat)} {cat}"} for cat in categorias]
+    await enviar_lista(to, f"Buenísimo, ¿en qué se fue la plata de {icono_cuenta(cuenta)} {cuenta}?", "Elegir categoría", filas)
 
 SALUDOS = {"hola", "hi", "hey", "buenas", "menu", "menú", "hello", "buenos dias",
            "buenos días", "buenas tardes", "buenas noches"}
@@ -647,8 +675,8 @@ async def _guardar_gasto(numero: str, nombre: str, cuenta, categoria: str, monto
 def _confirmacion(gasto: dict) -> str:
     partes = []
     if gasto.get("cuenta"):
-        partes.append(gasto["cuenta"])
-    partes.append(gasto["categoria"])
+        partes.append(f"{icono_cuenta(gasto['cuenta'])} {gasto['cuenta']}")
+    partes.append(f"{icono_categoria(gasto['categoria'])} {gasto['categoria']}")
     texto = f"✅ ¡Anotado! {' · '.join(partes)} {fmt_monto(gasto['monto'])}"
     if gasto.get("descripcion"):
         texto += f" ({gasto['descripcion']})"
@@ -736,22 +764,24 @@ def _estado_texto(gasto: dict):
 
     config = CUENTAS_CONFIG[cuenta]
     partes = []
+    icat = icono_categoria(categoria)
+    icu = icono_cuenta(cuenta)
 
     limite_cat = config["categorias"].get(categoria)
     total_cat = total_categoria_en_cuenta(cuenta, categoria)
     if limite_cat:
         emoji = _emoji_progreso(total_cat, limite_cat)
-        partes.append(f"{emoji} {categoria}: {fmt_monto(total_cat)}/{fmt_monto(limite_cat)}")
+        partes.append(f"{emoji}{icat} {categoria}: {fmt_monto(total_cat)}/{fmt_monto(limite_cat)}")
     else:
-        partes.append(f"{categoria}: {fmt_monto(total_cat)}")
+        partes.append(f"{icat} {categoria}: {fmt_monto(total_cat)}")
 
     total_c = total_cuenta(cuenta)
     limite_total = config.get("presupuesto_total")
     if limite_total:
         emoji_total = _emoji_progreso(total_c, limite_total)
-        partes.append(f"{emoji_total} Total {cuenta}: {fmt_monto(total_c)}/{fmt_monto(limite_total)}")
+        partes.append(f"{emoji_total}{icu} Total {cuenta}: {fmt_monto(total_c)}/{fmt_monto(limite_total)}")
     else:
-        partes.append(f"Total {cuenta}: {fmt_monto(total_c)}")
+        partes.append(f"{icu} Total {cuenta}: {fmt_monto(total_c)}")
 
     return " · ".join(partes)
 
@@ -761,7 +791,7 @@ def construir_resumen() -> str:
     lineas = [f"📊 Así vamos en {mes_label}"]
 
     for cuenta, config in CUENTAS_CONFIG.items():
-        lineas.append(f"\n*{cuenta}*")
+        lineas.append(f"\n*{icono_cuenta(cuenta)} {cuenta}*")
         total = total_cuenta(cuenta)
         limite_total = config.get("presupuesto_total")
         if limite_total:
@@ -773,12 +803,13 @@ def construir_resumen() -> str:
 
         for cat, limite in config["categorias"].items():
             total_cat = total_categoria_en_cuenta(cuenta, cat)
+            icat = icono_categoria(cat)
             if limite:
                 emoji = _emoji_progreso(total_cat, limite)
                 extra = f" (+{fmt_monto(total_cat - limite)})" if total_cat > limite else ""
-                lineas.append(f"  {emoji} {cat}: {fmt_monto(total_cat)} / {fmt_monto(limite)}{extra}")
+                lineas.append(f"  {emoji}{icat} {cat}: {fmt_monto(total_cat)} / {fmt_monto(limite)}{extra}")
             else:
-                lineas.append(f"  ⚪ {cat}: {fmt_monto(total_cat)}")
+                lineas.append(f"  {icat} {cat}: {fmt_monto(total_cat)}")
 
     return "\n".join(lineas)
 
@@ -853,7 +884,7 @@ async def recibir_mensaje(request: Request):
             extra = f" (presupuesto {fmt_monto(limite)})" if limite else ""
             await enviar_mensaje(
                 numero,
-                f"Dale, {categoria}{extra} 💛 ¿Cuánto fue? (cuéntame en qué si quieres, ej: \"8.500 cena con amigas\")",
+                f"Dale, {icono_categoria(categoria)} {categoria}{extra} 💛 ¿Cuánto fue? (cuéntame en qué si quieres, ej: \"8.500 cena con amigas\")",
             )
             return {"status": "ok"}
 
@@ -897,7 +928,7 @@ async def recibir_mensaje(request: Request):
         extra = f" (presupuesto {fmt_monto(limite)})" if limite else ""
         await enviar_mensaje(
             numero,
-            f"Dale, {categoria} de {cuenta}{extra} 💛 ¿Cuánto fue? (puedes contarme en qué, ej: \"8.500 cena con amigas\")",
+            f"Dale, {icono_categoria(categoria)} {categoria} de {icono_cuenta(cuenta)} {cuenta}{extra} 💛 ¿Cuánto fue? (puedes contarme en qué, ej: \"8.500 cena con amigas\")",
         )
         return {"status": "ok"}
 
