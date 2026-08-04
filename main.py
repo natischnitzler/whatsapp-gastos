@@ -236,6 +236,8 @@ def _migrar_columna_codigo(ws):
     if "Codigo" in headers:
         return
     col_codigo = len(headers) + 1
+    if ws.col_count < col_codigo:
+        ws.add_cols(col_codigo - ws.col_count)  # la grilla puede ser más angosta que los headers reales
     ws.update_cell(1, col_codigo, "Codigo")
 
     inverso = {}
