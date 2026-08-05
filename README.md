@@ -192,29 +192,38 @@ cual como respaldo histórico — el bot deja de escribirle y empieza a usar las
 pestañas por mes desde ahora. Si quieres, puedes copiar esas filas antiguas a
 mano a la pestaña del mes que correspondía.
 
-## Definir los presupuestos (y códigos) desde el Excel
+## Definir los presupuestos, categorías y códigos desde el Excel
 
 Si conectaste Google Sheets (Paso 0), el bot crea automáticamente una **pestaña
 llamada "Presupuestos"** en la misma planilla, prellenada con los montos y
 códigos actuales. Columnas: `Cuenta`, `Categoria`, `Presupuesto`, `Codigo`.
 
+Esta pestaña es la **fuente de verdad completa** de las categorías de cada
+cuenta — no solo de los montos:
+- **Agregar una fila nueva** (ej: `Casa | Transporte | 30000`) crea esa
+  categoría — va a aparecer en los botones, la lista, el `resumen`, todo.
+- **Cambiar el texto de Categoria** en una fila existente la renombra (ej:
+  cambiar "Deporte" por "Salud y deporte").
+- **Borrar una fila** elimina esa categoría (deja de aparecer en la lista).
 - Una fila con **Categoria en blanco** = el tope general de esa cuenta (sin código)
 - Dejar **Presupuesto en blanco** = sin límite para esa categoría
 - La columna **Codigo** trae algo tipo `LN01`, `CA03`, etc. — pueden **cambiarlo
-  por lo que quieran** (ej: renombrar `LD01` a `N01`) y el bot lo respeta apenas
-  se sincronice
-- Cualquier cambio de montos o códigos se relee:
+  por lo que quieran** (ej: renombrar `LD01` a `N01`)
+- Cualquier cambio se relee:
   - automáticamente cada vez que alguien pide `resumen`
   - cada 5 minutos en segundo plano (ver más abajo)
   - o al tiro si escriben `sincronizar`
-- Las categorías en sí (los nombres) siguen definiéndose en `main.py` — la
-  planilla controla los **montos y códigos**, no agrega categorías nuevas.
-- Si agregan una fila con una categoría que el bot no reconoce (ej: escrita
-  mal, o de una cuenta que no existe), el bot la ignora sin problema — no
-  rompe nada, simplemente no la toma en cuenta.
-- Si ya tenías esta pestaña creada de una versión anterior del bot (sin columna
-  Codigo), no te preocupes — el bot la detecta y **agrega la columna sola**, con
-  los códigos ya rellenados, la próxima vez que sincronice.
+
+⚠️ Al **renombrar** una categoría, los gastos que ya estaban registrados con el
+nombre viejo (ej: gastos de "Deporte" de antes del cambio) siguen contando para
+el **Total** de la cuenta, pero no van a aparecer en ninguna línea específica
+del `resumen` (porque esa categoría ya no existe) — quedan "sueltos" dentro del
+total. Si prefieren que no pase esto, lo más limpio es hacer el cambio de
+nombre a principios de mes, antes de que haya gastos con el nombre viejo.
+
+Si ya tenías esta pestaña creada de una versión anterior del bot (sin columna
+Codigo), no te preocupes — el bot la detecta y **agrega la columna sola**, con
+los códigos ya rellenados, la próxima vez que sincronice.
 
 ## Compartido entre celulares, y sincronización con la planilla
 

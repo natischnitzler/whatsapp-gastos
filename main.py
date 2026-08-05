@@ -449,18 +449,22 @@ def _hoja_presupuestos():
     return _hoja_cache["ws_presupuestos"]
 
 def _cargar_presupuestos_desde_sheet():
-    """Sobrescribe los montos de CUENTAS_CONFIG y los códigos con lo que esté en la
-    pestaña 'Presupuestos'. Deja la fila de Categoria en blanco para el tope general
-    de la cuenta. La columna Codigo es lo que la gente puede escribir directo en el
-    chat (ej: 'LN01 5.000 starbucks') en vez del nombre completo."""
+    """La pestaña 'Presupuestos' pasa a ser la fuente de verdad de las categorías de
+    cada cuenta (no solo los montos): agregar una fila nueva crea la categoría, sacar
+    una fila la elimina, y cambiar el texto de Categoria la renombra. Deja la fila de
+    Categoria en blanco para el tope general de la cuenta. La columna Codigo es lo que
+    la gente puede escribir directo en el chat (ej: 'LN01 5.000 starbucks')."""
     global CODIGOS
     if not sheets_configurado():
         return
     try:
         ws = _hoja_presupuestos()
         filas = ws.get_all_records()
-        actualizados = 0
-        codigos_nuevos = dict(_generar_codigos_iniciales())  # parte de la base, la planilla puede agregar/sobrescribir
+
+        nuevas_categorias = {cuenta: {} for cuenta in CUENTAS_CONFIG}
+        nuevos_totales = {cuenta: CUENTAS_CONFIG[cuenta].get("presupuesto_total") for cuenta in CUENTAS_CONFIG}
+        codigos_hoja = {}
+
         for fila in filas:
             cuenta = str(fila.get("Cuenta", "")).strip()
             categoria = str(fila.get("Categoria", "")).strip()
@@ -473,17 +477,24 @@ def _cargar_presupuestos_desde_sheet():
             except ValueError:
                 continue
             if categoria:
-                if categoria in CUENTAS_CONFIG[cuenta]["categorias"]:
-                    CUENTAS_CONFIG[cuenta]["categorias"][categoria] = presupuesto
-                    actualizados += 1
-                    if codigo_raw:
-                        codigo_norm = re.sub(r"\s+", "", codigo_raw).upper()
-                        codigos_nuevos[codigo_norm] = (cuenta, categoria)
+                nuevas_categorias[cuenta][categoria] = presupuesto
+                if codigo_raw:
+                    codigos_hoja[re.sub(r"\s+", "", codigo_raw).upper()] = (cuenta, categoria)
             else:
-                CUENTAS_CONFIG[cuenta]["presupuesto_total"] = presupuesto
-                actualizados += 1
-        CODIGOS = codigos_nuevos
-        print(f"Presupuestos: {actualizados} valores actualizados, {len(CODIGOS)} códigos activos.")
+                nuevos_totales[cuenta] = presupuesto
+
+        actualizadas = 0
+        for cuenta in CUENTAS_CONFIG:
+            if nuevas_categorias[cuenta]:  # si la hoja no traía ninguna fila para esta cuenta, no la vaciamos (evita perder todo por una hoja vacía/con error)
+                CUENTAS_CONFIG[cuenta]["categorias"] = nuevas_categorias[cuenta]
+                actualizadas += len(nuevas_categorias[cuenta])
+            CUENTAS_CONFIG[cuenta]["presupuesto_total"] = nuevos_totales[cuenta]
+
+        codigos_generados = _generar_codigos_iniciales()  # basado en las categorías ya actualizadas
+        codigos_generados.update(codigos_hoja)  # los códigos explícitos de la hoja mandan por sobre los generados
+        CODIGOS = codigos_generados
+
+        print(f"Presupuestos: {actualizadas} categorías activas, {len(CODIGOS)} códigos.")
     except Exception as e:
         import traceback
         print(f"Error cargando presupuestos desde Google Sheets: {type(e).__name__}: {e!r}")
@@ -1100,7 +1111,9 @@ def _estado_texto(gasto: dict):
     total_cat = total_categoria_en_cuenta(cuenta, categoria)
     if limite_cat:
         emoji = _emoji_progreso(total_cat, limite_cat)
-        partes.append(f"{emoji}{icat} {categoria}: {fmt_monto(total_cat)}/{fmt_monto(limite_cat)}")
+        restante = limite_cat - total_cat
+        extra = f" (quedan {fmt_monto(restante)})" if restante >= 0 else f" (pasado por {fmt_monto(-restante)})"
+        partes.append(f"{emoji}{icat} {categoria}: {fmt_monto(total_cat)}/{fmt_monto(limite_cat)}{extra}")
     else:
         partes.append(f"{icat} {categoria}: {fmt_monto(total_cat)}")
 
@@ -1108,7 +1121,9 @@ def _estado_texto(gasto: dict):
     limite_total = config.get("presupuesto_total")
     if limite_total:
         emoji_total = _emoji_progreso(total_c, limite_total)
-        partes.append(f"{emoji_total}{icu} Total {cuenta}: {fmt_monto(total_c)}/{fmt_monto(limite_total)}")
+        restante_total = limite_total - total_c
+        extra_total = f" (quedan {fmt_monto(restante_total)})" if restante_total >= 0 else f" (pasado por {fmt_monto(-restante_total)})"
+        partes.append(f"{emoji_total}{icu} Total {cuenta}: {fmt_monto(total_c)}/{fmt_monto(limite_total)}{extra_total}")
     else:
         partes.append(f"{icu} Total {cuenta}: {fmt_monto(total_c)}")
 
