@@ -192,11 +192,12 @@ cual como respaldo histórico — el bot deja de escribirle y empieza a usar las
 pestañas por mes desde ahora. Si quieres, puedes copiar esas filas antiguas a
 mano a la pestaña del mes que correspondía.
 
-## Definir los presupuestos, categorías y códigos desde el Excel
+## Definir los presupuestos, categorías, códigos e íconos desde el Excel
 
 Si conectaste Google Sheets (Paso 0), el bot crea automáticamente una **pestaña
-llamada "Presupuestos"** en la misma planilla, prellenada con los montos y
-códigos actuales. Columnas: `Cuenta`, `Categoria`, `Presupuesto`, `Codigo`.
+llamada "Presupuestos"** en la misma planilla, prellenada con los montos,
+códigos e íconos actuales. Columnas: `Cuenta`, `Categoria`, `Presupuesto`,
+`Codigo`, `Icono`.
 
 Esta pestaña es la **fuente de verdad completa** de las categorías de cada
 cuenta — no solo de los montos:
@@ -209,6 +210,10 @@ cuenta — no solo de los montos:
 - Dejar **Presupuesto en blanco** = sin límite para esa categoría
 - La columna **Codigo** trae algo tipo `LN01`, `CA03`, etc. — pueden **cambiarlo
   por lo que quieran** (ej: renombrar `LD01` a `N01`)
+- La columna **Icono** trae el emoji de cada categoría/cuenta — pueden
+  **cambiarlo o agregarlo** ahí mismo (útil sobre todo para categorías nuevas,
+  que no traen ícono por defecto — quedan con 🔹 hasta que le pongan uno). El
+  dashboard también usa estos mismos íconos.
 - Cualquier cambio se relee:
   - automáticamente cada vez que alguien pide `resumen`
   - cada 5 minutos en segundo plano (ver más abajo)
@@ -222,8 +227,9 @@ total. Si prefieren que no pase esto, lo más limpio es hacer el cambio de
 nombre a principios de mes, antes de que haya gastos con el nombre viejo.
 
 Si ya tenías esta pestaña creada de una versión anterior del bot (sin columna
-Codigo), no te preocupes — el bot la detecta y **agrega la columna sola**, con
-los códigos ya rellenados, la próxima vez que sincronice.
+Codigo y/o Icono), no te preocupes — el bot las detecta y **agrega las que
+falten sola**, con los valores ya rellenados donde pueda, la próxima vez que
+sincronice.
 
 ## Compartido entre celulares, y sincronización con la planilla
 
@@ -341,6 +347,7 @@ Prueba mandando `comida almuerzo 5.000` al número de WhatsApp — debería conf
 | `POST /webhook` | Recibe los mensajes entrantes de WhatsApp |
 | `GET /gastos` | Lista de gastos en memoria (lo usa el dashboard) |
 | `GET /resumen` | Estado de presupuestos por cuenta y categoría en JSON (lo usa el dashboard) |
+| `GET /iconos` | Íconos actuales por cuenta y categoría en JSON (lo usa el dashboard) |
 | `GET /health` | Estado del servicio |
 | `GET /export?key=TU_ADMIN_KEY` | Respaldo completo en JSON |
 | `GET /reset?key=TU_ADMIN_KEY` | Borra todo (úsalo con cuidado) |

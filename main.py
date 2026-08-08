@@ -280,7 +280,8 @@ def _actualizar_presupuesto_en_sheet_sync(cuenta: str, categoria, nuevo_valor: f
         codigo = ""
         if categoria:
             codigo = next((c for c, (cu, ca) in CODIGOS.items() if cu == cuenta and ca == categoria), "")
-        ws.append_row([cuenta, categoria or "", nuevo_valor, codigo])
+        icono = icono_categoria(categoria) if categoria else icono_cuenta(cuenta)
+        ws.append_row([cuenta, categoria or "", nuevo_valor, codigo, icono])
     except Exception as e:
         import traceback
         print(f"Error actualizando presupuesto en Google Sheets: {type(e).__name__}: {e!r}")
@@ -427,6 +428,25 @@ def _migrar_columna_codigo(ws):
         if categoria and (cuenta, categoria) in inverso:
             ws.update_cell(idx, col_codigo, inverso[(cuenta, categoria)])
 
+def _migrar_columna_icono(ws):
+    """Si la pestaña 'Presupuestos' ya existía de antes (sin columna Icono), la agrega
+    y la rellena con los íconos actuales, para que categoría e ícono vivan juntos."""
+    headers = ws.row_values(1)
+    if "Icono" in headers:
+        return
+    col_icono = len(headers) + 1
+    if ws.col_count < col_icono:
+        ws.add_cols(col_icono - ws.col_count)
+    ws.update_cell(1, col_icono, "Icono")
+
+    filas = ws.get_all_records()
+    for idx, fila in enumerate(filas, start=2):
+        cuenta = str(fila.get("Cuenta", "")).strip()
+        categoria = str(fila.get("Categoria", "")).strip()
+        icono = ICONOS_CATEGORIA.get(categoria, "") if categoria else ICONOS_CUENTA.get(cuenta, "")
+        if icono:
+            ws.update_cell(idx, col_icono, icono)
+
 def _hoja_presupuestos():
     """Pestaña 'Presupuestos' — se crea sola la primera vez, prellenada con los valores actuales."""
     if "ws_presupuestos" not in _hoja_cache:
@@ -435,15 +455,16 @@ def _hoja_presupuestos():
         try:
             ws = sh.worksheet("Presupuestos")
             _migrar_columna_codigo(ws)
+            _migrar_columna_icono(ws)
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title="Presupuestos", rows=50, cols=4)
-            ws.append_row(["Cuenta", "Categoria", "Presupuesto", "Codigo"])
+            ws = sh.add_worksheet(title="Presupuestos", rows=50, cols=5)
+            ws.append_row(["Cuenta", "Categoria", "Presupuesto", "Codigo", "Icono"])
             filas = []
             for cuenta, config in CUENTAS_CONFIG.items():
-                filas.append([cuenta, "", config.get("presupuesto_total") or "", ""])
+                filas.append([cuenta, "", config.get("presupuesto_total") or "", "", icono_cuenta(cuenta)])
                 for cat, limite in config["categorias"].items():
                     codigo = next((c for c, (cu, ca) in CODIGOS.items() if cu == cuenta and ca == cat), "")
-                    filas.append([cuenta, cat, limite if limite else "", codigo])
+                    filas.append([cuenta, cat, limite if limite else "", codigo, icono_categoria(cat)])
             ws.append_rows(filas)
         _hoja_cache["ws_presupuestos"] = ws
     return _hoja_cache["ws_presupuestos"]
@@ -464,12 +485,15 @@ def _cargar_presupuestos_desde_sheet():
         nuevas_categorias = {cuenta: {} for cuenta in CUENTAS_CONFIG}
         nuevos_totales = {cuenta: CUENTAS_CONFIG[cuenta].get("presupuesto_total") for cuenta in CUENTAS_CONFIG}
         codigos_hoja = {}
+        iconos_categoria_hoja = {}
+        iconos_cuenta_hoja = {}
 
         for fila in filas:
             cuenta = str(fila.get("Cuenta", "")).strip()
             categoria = str(fila.get("Categoria", "")).strip()
             presupuesto_raw = str(fila.get("Presupuesto", "")).strip()
             codigo_raw = str(fila.get("Codigo", "")).strip()
+            icono_raw = str(fila.get("Icono", "")).strip()
             if cuenta not in CUENTAS_CONFIG:
                 continue
             try:
@@ -480,8 +504,15 @@ def _cargar_presupuestos_desde_sheet():
                 nuevas_categorias[cuenta][categoria] = presupuesto
                 if codigo_raw:
                     codigos_hoja[re.sub(r"\s+", "", codigo_raw).upper()] = (cuenta, categoria)
+                if icono_raw:
+                    iconos_categoria_hoja[categoria] = icono_raw
             else:
                 nuevos_totales[cuenta] = presupuesto
+                if icono_raw:
+                    iconos_cuenta_hoja[cuenta] = icono_raw
+
+        ICONOS_CATEGORIA.update(iconos_categoria_hoja)
+        ICONOS_CUENTA.update(iconos_cuenta_hoja)
 
         actualizadas = 0
         for cuenta in CUENTAS_CONFIG:
@@ -1403,16 +1434,22 @@ def resumen_json():
     cuentas = []
     for cuenta, config in CUENTAS_CONFIG.items():
         categorias = [
-            {"nombre": cat, "gastado": total_categoria_en_cuenta(cuenta, cat), "presupuesto": limite}
+            {"nombre": cat, "gastado": total_categoria_en_cuenta(cuenta, cat), "presupuesto": limite,
+             "icono": icono_categoria(cat)}
             for cat, limite in config["categorias"].items()
         ]
         cuentas.append({
             "nombre": cuenta,
             "gastado": total_cuenta(cuenta),
             "presupuesto": config.get("presupuesto_total"),
+            "icono": icono_cuenta(cuenta),
             "categorias": categorias,
         })
     return {"mes": f"{MESES_ES.get(ahora.month, ahora.month)} {ahora.year}", "cuentas": cuentas}
+
+@app.get("/iconos")
+def iconos_json():
+    return {"cuentas": ICONOS_CUENTA, "categorias": ICONOS_CATEGORIA}
 
 @app.get("/health")
 async def health():

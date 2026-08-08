@@ -228,6 +228,7 @@
 
   const PALETA = ['#a9803f', '#566159', '#a3403f', '#7a8471', '#8a6d3b', '#5b7065', '#8a8272', '#6b5b8a', '#3f6a8a'];
 
+  // Fallback por si el backend no responde a tiempo — se sobreescribe con loadIconos()
   const ICONOS_CUENTA = { Casa: '🏠', Linda: '💛', Lindo: '💙' };
   const ICONOS_CATEGORIA = {
     Perros: '🐶', Tali: '✨', Farmacia: '💊', Regalos: '🎁', Supermercado: '🛒', Spid: '⚡',
@@ -235,6 +236,18 @@
   };
   const iconoCuenta = c => ICONOS_CUENTA[c] || '💰';
   const iconoCategoria = c => ICONOS_CATEGORIA[c] || '🔹';
+
+  async function loadIconos() {
+    try {
+      const res = await fetch(`${API_BASE}/iconos`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      Object.assign(ICONOS_CUENTA, data.cuentas || {});
+      Object.assign(ICONOS_CATEGORIA, data.categorias || {});
+    } catch (err) {
+      console.error('No se pudieron cargar los íconos, usando los por defecto:', err);
+    }
+  }
 
   let allGastos = [];
   let activePerson = 'Todos';
@@ -394,10 +407,10 @@
     `;
   }
 
-  loadGastos();
-  loadResumen();
+  loadIconos().then(() => { loadGastos(); loadResumen(); });
   setInterval(loadGastos, POLL_MS); // sin base de datos no hay realtime, así que refrescamos cada X segundos
   setInterval(loadResumen, POLL_MS);
+  setInterval(loadIconos, POLL_MS);
 </script>
 </body>
 </html>
