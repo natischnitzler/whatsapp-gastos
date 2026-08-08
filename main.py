@@ -548,7 +548,7 @@ CATEGORIAS_LIBRES = {
 }
 
 MONTO_REGEX = re.compile(
-    r"\$?\s?(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s?(k)?",
+    r"\$?\s?(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?:\s?(k))?",
     re.IGNORECASE,
 )
 
@@ -667,7 +667,15 @@ def parse_message(texto_original: str):
     return {"categoria": categoria, "monto": monto, "descripcion": descripcion or None}
 
 def _match_categoria_en_cuenta(cuenta: str, texto_norm: str, texto_original: str):
-    """Busca el nombre (o sinónimo) de cualquier categoría de esa cuenta en el texto."""
+    """Busca el ícono, el nombre, o un sinónimo de cualquier categoría de esa cuenta en el
+    texto. El ícono va primero porque es inequívoco (a diferencia de sinónimos como
+    'starbucks', que a veces el usuario quiere dejar como parte de la descripción)."""
+    for cat in CUENTAS_CONFIG[cuenta]["categorias"]:
+        icono = ICONOS_CATEGORIA.get(cat)
+        if icono and icono in texto_original:
+            idx = texto_original.find(icono)
+            return cat, texto_original[idx:idx + len(icono)]
+
     for cat in CUENTAS_CONFIG[cuenta]["categorias"]:
         candidatos = [cat] + SINONIMOS_CATEGORIA.get(cat, [])
         for candidato in candidatos:
@@ -698,9 +706,15 @@ def parse_directo(texto_original: str, numero: str = None):
             cuenta_match = categoria_match = token  # se descuenta una sola vez de la descripción
             break
 
-    # 2) Si no hay código, busca por nombre de cuenta explícito en el texto
+    # 2) Si no hay código, busca por nombre o ícono de cuenta explícito en el texto
     if not cuenta_encontrada:
         for cuenta in CUENTAS_CONFIG:
+            icono_c = ICONOS_CUENTA.get(cuenta)
+            if icono_c and icono_c in texto_original:
+                idx = texto_original.find(icono_c)
+                cuenta_encontrada = cuenta
+                cuenta_match = texto_original[idx:idx + len(icono_c)]
+                break
             cuenta_norm = normalizar_texto(cuenta)
             m = re.search(rf"\b{re.escape(cuenta_norm)}\b", texto_norm)
             if m:

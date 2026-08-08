@@ -38,6 +38,11 @@ tiro y no hace falta tocar nada:
 - `Casa supermercado 15.000 verduras`
 - `Starbucks 3.000, cafecitos de Lindo` (el orden no importa)
 
+**También reconoce el ícono/emoji** de la cuenta o la categoría, en vez del
+nombre — es más rápido de escribir desde el teclado de emojis del celular:
+- `☕ 5.000` → reconoce Cafecitos (Lindo) directo
+- `🏠 🛒 30.000 lider` → Casa + Supermercado
+
 **Ni siquiera hace falta decir la cuenta**, si la categoría no es ambigua:
 - `perros 12.000 vacuna` → reconoce Casa solo, porque "Perros" solo existe ahí
 
