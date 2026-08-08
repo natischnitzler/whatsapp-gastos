@@ -151,6 +151,23 @@ def _actualizar_resumenes_todos_los_meses():
         except Exception as e:
             print(f"Error actualizando resumen de {ym}: {type(e).__name__}: {e!r}")
 
+def _normalizar_cuenta_de_sheet(valor):
+    """Tolera errores de tipeo típicos al escribir la cuenta a mano en el Excel:
+    mayúsculas/minúsculas, espacios de más, o un plural de más (ej: 'Lindos' -> 'Lindo').
+    Si no logra reconocerla, la deja tal cual (mejor que perderla en silencio)."""
+    valor = (valor or "").strip()
+    if not valor:
+        return None
+    for cuenta in CUENTAS_CONFIG:
+        if cuenta.lower() == valor.lower():
+            return cuenta
+    if valor.lower().endswith("s"):
+        sin_s = valor[:-1]
+        for cuenta in CUENTAS_CONFIG:
+            if cuenta.lower() == sin_s.lower():
+                return cuenta
+    return valor
+
 def _cargar_desde_sheet():
     """Al iniciar el servidor, restaura el historial de TODAS las pestañas de mes."""
     global gastos, _next_id
@@ -170,7 +187,7 @@ def _cargar_desde_sheet():
                 todos.append({
                     "member_phone": "",
                     "member_name": fila.get("Quien", ""),
-                    "cuenta": fila.get("Cuenta") or None,
+                    "cuenta": _normalizar_cuenta_de_sheet(fila.get("Cuenta")),
                     "categoria": fila.get("Categoria", ""),
                     "descripcion": fila.get("Descripcion") or None,
                     "monto": monto,
@@ -489,7 +506,7 @@ def _cargar_presupuestos_desde_sheet():
         iconos_cuenta_hoja = {}
 
         for fila in filas:
-            cuenta = str(fila.get("Cuenta", "")).strip()
+            cuenta = _normalizar_cuenta_de_sheet(fila.get("Cuenta", "")) or ""
             categoria = str(fila.get("Categoria", "")).strip()
             presupuesto_raw = str(fila.get("Presupuesto", "")).strip()
             codigo_raw = str(fila.get("Codigo", "")).strip()
@@ -857,7 +874,8 @@ async def enviar_bienvenida(to: str, nombre: str):
     recordatorio = RECORDATORIOS[datetime.now(timezone.utc).day % len(RECORDATORIOS)]
     texto = (
         f"{saludo}, {nombre} 💛\n"
-        f"¿En qué gastaste? Elige una cuenta, o escribe *resumen* para ver cómo van.\n\n"
+        f"¿En qué gastaste? Elige una cuenta, o escribe *resumen* para ver cómo van "
+        f"(o *categorias* para ver todas con su código).\n\n"
         f"{recordatorio}"
     )
     botones = [{"id": f"cuenta_{_slug(c)}", "title": f"{icono_cuenta(c)} Gastos {c}"} for c in CUENTAS_CONFIG]
@@ -872,6 +890,8 @@ SALUDOS = {"hola", "hi", "hey", "buenas", "menu", "menú", "hello", "buenos dias
            "buenos días", "buenas tardes", "buenas noches"}
 
 RESUMEN_PALABRAS = {"resumen", "presupuesto", "presupuestos", "como vamos", "cómo vamos", "balance"}
+
+CATEGORIAS_PALABRAS = {"categorias", "categoria", "ver categorias", "lista de categorias", "codigos"}
 
 SYNC_PALABRAS = {"sincronizar", "actualizar", "recargar"}
 
@@ -1174,6 +1194,24 @@ def _estado_texto(gasto: dict):
 
     return " · ".join(partes)
 
+def construir_lista_categorias() -> str:
+    """Chuleta con todas las categorías: ícono, nombre, código y a qué cuenta pertenecen."""
+    inverso = {}
+    for codigo, (cu, ca) in CODIGOS.items():
+        inverso[(cu, ca)] = codigo  # si hay más de un código para el mismo par, gana el último (el más nuevo)
+
+    lineas = ["📋 Estas son las categorías:"]
+    for cuenta, config in CUENTAS_CONFIG.items():
+        lineas.append(f"\n*{icono_cuenta(cuenta)} {cuenta}*")
+        if not config["categorias"]:
+            lineas.append("  (sin categorías todavía)")
+            continue
+        for cat in config["categorias"]:
+            codigo = inverso.get((cuenta, cat))
+            sufijo = f" — {codigo}" if codigo else ""
+            lineas.append(f"{icono_categoria(cat)} {cat}{sufijo}")
+    return "\n".join(lineas)
+
 def construir_resumen() -> str:
     ahora = datetime.now(timezone.utc)
     mes_label = f"{MESES_ES.get(ahora.month, ahora.month)} {ahora.year}"
@@ -1314,6 +1352,13 @@ async def recibir_mensaje(request: Request):
     if texto_lower in RESUMEN_PALABRAS:
         await sincronizar_todo()
         await enviar_mensaje(numero, construir_resumen())
+        return {"status": "ok"}
+
+    # ── Pedir la lista de categorías (con ícono, código y cuenta) ──
+    if texto_lower in CATEGORIAS_PALABRAS:
+        if sheets_configurado():
+            await asyncio.to_thread(_cargar_presupuestos_desde_sheet)
+        await enviar_mensaje(numero, construir_lista_categorias())
         return {"status": "ok"}
 
     # ── Forzar resincronización manual con la planilla (por si editaron algo a mano) ──

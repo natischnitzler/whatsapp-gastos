@@ -91,6 +91,39 @@ tiene $33.000 de presupuesto"*. El cambio queda guardado en la pestaña
 "Presupuestos" del Excel también (si Sheets está conectado), así no se pierde
 al reiniciar el servidor.
 
+## Ver todas las categorías (con ícono, código y cuenta)
+
+Escribe **`categorias`** (o `codigos`) y el bot manda la lista completa,
+agrupada por cuenta — es la referencia rápida para acordarse de los códigos
+sin tener que abrir el Excel:
+
+```
+📋 Estas son las categorías:
+
+🏠 Casa
+🐶 Perros — CA01
+✨ Tali — CA02
+💊 Farmacia — CA03
+🎁 Regalos — CA04
+🛒 Supermercado — CA05
+⚡ Spid — CA06
+
+💛 Linda
+🏃 Deporte — LN01
+🍽️ Salir a comer — LN02
+💅 Belleza — LN03
+
+💙 Lindo
+☕ Cafecitos — LD01
+💅 Belleza — LD02
+🎉 Salidas — LD03
+🔹 Otros — LD04
+```
+
+Refleja lo que esté sincronizado en ese momento — si renombraron algo o
+cambiaron un código en el Excel, escribe `sincronizar` justo antes para
+asegurarte de ver lo último.
+
 ## Eliminar o modificar un gasto
 
 Escribe **`eliminar`** (o `borrar`) o **`modificar`** (o `editar`, `corregir`) y
