@@ -1296,10 +1296,9 @@ async def recibir_mensaje(request: Request):
         await enviar_bienvenida(numero, nombre)
         return {"status": "ok"}
 
-    # ── Pedir el resumen de presupuestos (refresca los montos desde Sheets primero) ──
+    # ── Pedir el resumen de presupuestos (refresca gastos Y presupuestos desde Sheets primero) ──
     if texto_lower in RESUMEN_PALABRAS:
-        if sheets_configurado():
-            await asyncio.to_thread(_cargar_presupuestos_desde_sheet)
+        await sincronizar_todo()
         await enviar_mensaje(numero, construir_resumen())
         return {"status": "ok"}
 
